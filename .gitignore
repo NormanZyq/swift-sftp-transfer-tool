@@ -1,0 +1,12 @@
+# Swift Package Manager 构建产物（含依赖的完整克隆，~1GB；勿提交）
+.build/
+.swiftpm/
+
+# 双击运行的 app（用 ./make-app.sh 自行生成；二进制内嵌本机绝对路径，勿提交）
+*.app/
+
+# macOS Finder 元数据
+.DS_Store
+
+# Claude Code 本地设置（个人本地配置）
+.claude/settings.local.json
