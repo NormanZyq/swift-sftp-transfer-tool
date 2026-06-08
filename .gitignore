@@ -10,3 +10,6 @@
 
 # Claude Code 本地设置（个人本地配置）
 .claude/settings.local.json
+
+# 编辑器本地配置（VS Code / Cursor 调试配置，自动生成，因机而异）
+.vscode/
