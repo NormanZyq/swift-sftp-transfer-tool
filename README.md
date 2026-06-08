@@ -14,20 +14,18 @@ swift-nio-ssh 之上）。
 
 **打包成可双击的 app（推荐）**
 ```bash
-cd SFTPTransfer
 ./make-app.sh          # 生成「SSH 文件传输.app」
 open "SSH 文件传输.app" # 或双击；可拖到 /Applications
 ```
 
 **开发时直接跑**
 ```bash
-cd SFTPTransfer
 swift run
 ```
 
 **用 Xcode**
 ```bash
-open SFTPTransfer/Package.swift   # 按 Run
+open Package.swift   # 按 Run
 ```
 
 ## 功能（v1）
