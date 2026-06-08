@@ -1,0 +1,59 @@
+name: Release
+
+# 推送形如 v1.0.0 的 tag 时自动构建并发布 Release；也可在 Actions 页手动触发（仅验证构建）。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # 用内置 GITHUB_TOKEN 创建 Release / 上传产物所需
+
+jobs:
+  release:
+    runs-on: macos-15      # Apple Silicon，自带 Xcode 16 / Swift 6（可按需改成 macos-14 等）
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 工具链版本
+        run: swift --version
+
+      - name: 计算版本号（去掉 tag 前缀 v）
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: 构建 .app
+        run: ./make-app.sh   # 读取 $VERSION 写进 Info.plist；在 runner 上构建，路径不含个人用户名
+
+      - name: 打包 .dmg
+        run: |
+          APP="SSH 文件传输.app"
+          DMG="SFTPTransfer-${GITHUB_REF_NAME}.dmg"
+          STAGING="$(mktemp -d)/dmg"
+          mkdir -p "$STAGING"
+          cp -R "$APP" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"   # 安装窗口里的「拖到 Applications」快捷方式
+          hdiutil create -volname "SSH 文件传输" \
+            -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: 发布 Release 并上传 .dmg
+        if: startsWith(github.ref, 'refs/tags/')   # 手动触发时只构建、不发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$DMG" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+# ── 关于签名 ────────────────────────────────────────────────────────────────
+# 当前 make-app.sh 用的是 ad-hoc 签名，产出的 .dmg 未经 Apple 公证（notarize）。
+# 用户下载后首次打开会被 Gatekeeper 拦（“无法验证开发者”），需右键→打开，
+# 或执行：  xattr -dr com.apple.quarantine "/Applications/SSH 文件传输.app"
+#
+# 若有 Apple Developer 账号（$99/年），可升级为「Developer ID 签名 + 公证」做到下载即开：
+# 把证书与 App Store Connect 凭据存为仓库 Secrets，在“构建 .app”后增加：
+#   codesign --deep --force --options runtime --timestamp \
+#            --sign "Developer ID Application: <你的名字> (<TeamID>)" "$APP"
+#   xcrun notarytool submit "$DMG" --key ... --key-id ... --issuer ... --wait
+#   xcrun stapler staple "$DMG"
+# ─────────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ APP_NAME="SSH 文件传输"
 APP="$APP_NAME.app"
 EXEC="SFTPTransfer"
 BUNDLE_ID="local.shyulatte.sftptransfer"
-VERSION="1.0"
+VERSION="${VERSION:-1.0}"   # 默认 1.0；CI 可用环境变量覆盖（如用 tag 名）
 ICON="Resources/AppIcon.icns"
 
 echo "→ 编译 release …"
