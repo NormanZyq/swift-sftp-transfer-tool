@@ -63,7 +63,7 @@ cp "$BIN" "$APP/Contents/MacOS/$EXEC"
 if [ -f "$ICON" ]; then
     cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 else
-    echo "⚠ アイコン未検出: $ICON（Resources/make-icon.sh で生成できます）" >&2
+    echo "⚠ Icon not found: $ICON (can be generated with Resources/make-icon.sh)" >&2
 fi
 
 echo "→ ad-hoc 签名 …"

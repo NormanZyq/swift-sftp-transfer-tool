@@ -1,6 +1,6 @@
-// 1024×1024 のアプリアイコンをコードで描画して PNG 出力する。
-// 使い方: swift icon.swift <出力パス.png>
-// デザイン: 青いグラデーションの squircle（macOS Big Sur 風）に、白い双方向矢印（転送）を重ねる。
+// Draw a 1024×1024 app icon programmatically and write it out as a PNG.
+// Usage: swift icon.swift <output_path.png>
+// Design: blue gradient squircle (macOS Big Sur style) with white bidirectional arrows (transfer) overlaid.
 import AppKit
 
 let outPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "icon_1024.png"
@@ -13,22 +13,22 @@ guard let rep = NSBitmapImageRep(
     hasAlpha: true, isPlanar: false,
     colorSpaceName: .deviceRGB,
     bytesPerRow: 0, bitsPerPixel: 0
-) else { fatalError("ビットマップを作成できません") }
+) else { fatalError("Cannot create bitmap") }
 
 NSGraphicsContext.saveGraphicsState()
-guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { fatalError("コンテキストを作成できません") }
+guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { fatalError("Cannot create context") }
 NSGraphicsContext.current = ctx
 let cg = ctx.cgContext
 
-// --- 背景の squircle（角丸 + 余白でフロート感）---
+// --- Background squircle (rounded corners + margin for a floating feel) ---
 let margin: CGFloat = 92
 let rect = NSRect(x: margin, y: margin,
                   width: CGFloat(size) - 2 * margin,
                   height: CGFloat(size) - 2 * margin)
-let radius: CGFloat = 188 // 角丸/幅 ≈ 0.2237（macOS のアイコングリッド）
+let radius: CGFloat = 188 // corner-radius / width ≈ 0.2237 (macOS icon grid)
 let shape = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
 
-// 影をいったん落としてから、その上にグラデーションを重ねる
+// Drop a shadow first, then layer the gradient on top
 cg.saveGState()
 cg.setShadow(offset: CGSize(width: 0, height: -10), blur: 30,
              color: NSColor.black.withAlphaComponent(0.25).cgColor)
@@ -39,14 +39,14 @@ cg.restoreGState()
 let topColor = NSColor(srgbRed: 0.27, green: 0.56, blue: 0.99, alpha: 1)
 let bottomColor = NSColor(srgbRed: 0.09, green: 0.33, blue: 0.86, alpha: 1)
 if let gradient = NSGradient(starting: topColor, ending: bottomColor) {
-    gradient.draw(in: shape, angle: -90) // 上→下
+    gradient.draw(in: shape, angle: -90) // top to bottom
 }
 
-// --- 白い双方向矢印（転送）---
+// --- White bidirectional arrows (transfer) ---
 NSColor.white.setFill()
 NSColor.white.setStroke()
 
-// 上の矢印（右向き）
+// Top arrow (pointing right)
 let topShaft = NSBezierPath()
 topShaft.move(to: NSPoint(x: 340, y: 590))
 topShaft.line(to: NSPoint(x: 612, y: 590))
@@ -61,7 +61,7 @@ topHead.line(to: NSPoint(x: 600, y: 645))
 topHead.close()
 topHead.fill()
 
-// 下の矢印（左向き・上下対称）
+// Bottom arrow (pointing left, vertically symmetric)
 let botShaft = NSBezierPath()
 botShaft.move(to: NSPoint(x: 684, y: 434))
 botShaft.line(to: NSPoint(x: 412, y: 434))
@@ -79,7 +79,7 @@ botHead.fill()
 NSGraphicsContext.restoreGraphicsState()
 
 guard let png = rep.representation(using: .png, properties: [:]) else {
-    fatalError("PNG へ変換できません")
+    fatalError("Cannot convert to PNG")
 }
 try! png.write(to: URL(fileURLWithPath: outPath))
-print("✓ 書き出し: \(outPath)")
+print("✓ Wrote: \(outPath)")
