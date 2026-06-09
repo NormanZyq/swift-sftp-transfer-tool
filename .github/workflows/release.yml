@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# 同一时间只允许一个 release 在跑；新 tag 推送会等当前构建跑完，不取消进行中的发布。
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write          # 用内置 GITHUB_TOKEN 创建 Release / 上传产物所需
 
@@ -27,7 +32,7 @@ jobs:
       - name: 打包 .dmg
         run: |
           APP="SSH 文件传输.app"
-          DMG="SFTPTransfer-${GITHUB_REF_NAME}.dmg"
+          DMG="SFTPTransfer-${GITHUB_REF_NAME#v}.dmg"
           STAGING="$(mktemp -d)/dmg"
           mkdir -p "$STAGING"
           cp -R "$APP" "$STAGING/"
