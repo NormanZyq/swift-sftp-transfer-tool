@@ -7,6 +7,8 @@ struct ContentView: View {
     /// 结果提醒 toast（自动淡出）。
     @State private var toast: TransferEngine.Outcome?
     @State private var toastDismiss: Task<Void, Never>?
+    /// 折叠明细的自然高度（测量得到），折叠动画在 0 ↔ 该高度之间插值。
+    @State private var detailHeight: CGFloat = 0
 
     /// 实际是否展开：用户展开，或正在传输时强制展开（传输结束自动回到用户设置）。
     private var statusVisible: Bool { statusExpanded || app.engine.isRunning }
@@ -27,6 +29,10 @@ struct ContentView: View {
             statusSection
         }
         .padding(10)
+        // 统一收口：手动点击（statusExpanded）与传输自动展开/收起（isRunning）都汇入 statusVisible，
+        // 由这一个修饰符驱动整块布局——底部传输状态盒的高度、箭头旋转，以及上方文件列表面板
+        // 随之改变的高度——按同一曲线一起平滑回流，避免盒子伸缩而面板高度生硬跳变。
+        .animation(.easeInOut(duration: 0.26), value: statusVisible)
         // 结果提醒：底部一角轻量 toast，自动淡出
         .overlay(alignment: .bottomTrailing) {
             if let toast {
@@ -139,44 +145,71 @@ struct ContentView: View {
 
     private var statusSection: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Button {
-                        statusExpanded.toggle()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: statusVisible ? "chevron.down" : "chevron.right")
-                                .font(.caption.weight(.semibold))
-                            Text("传输状态").font(.subheadline.weight(.semibold))
-                            if !statusVisible && app.engine.queueTotal > 0 {
-                                Text("· 上次 \(app.engine.queueIndex)/\(app.engine.queueTotal)")
-                                    .font(.caption).monospacedDigit().foregroundStyle(.tertiary)
-                            }
+            VStack(alignment: .leading, spacing: 0) {
+                statusHeader
+                // 折叠区：用真实布局高度（测量得到的自然高度）在 0 ↔ 自然高度之间做动画。
+                // 这样外框每一帧都有一个确切的中间高度可贴合，于是「向下展开 / 向上收起」是连续的，
+                // 而不是外框瞬间跳到目标高度、只有内部内容在动（.transition 只动绘制、不动布局高度）。
+                statusDetail
+                    .padding(.top, 6)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: DetailHeightKey.self,
+                                                   value: proxy.size.height)
                         }
-                    }
-                    .buttonStyle(.plain)
-                    .help(statusExpanded ? "收起（传输时会自动展开）" : "展开")
-                    Spacer()
-                }
-
-                if statusVisible {
-                    HStack {
-                        Text(app.engine.isRunning ? app.engine.currentName : "等待传输…")
-                            .lineLimit(1)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if app.engine.queueTotal > 0 {
-                            Text("总进度 \(app.engine.queueIndex) / \(app.engine.queueTotal)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    ProgressView(value: progressFraction)
-                    logView
-                }
+                    )
+                    .frame(height: statusVisible ? detailHeight : 0, alignment: .top)
+                    .clipped()
+                    .opacity(statusVisible ? 1 : 0)
+                    .allowsHitTesting(statusVisible)
             }
             .padding(4)
-            .animation(.easeInOut(duration: 0.2), value: statusVisible)
         }
+        // 测得自然高度后回填；该变化本身不被动画（动画只盯 statusVisible），故不会在测量时抖动。
+        .onPreferenceChange(DetailHeightKey.self) { detailHeight = $0 }
+    }
+
+    /// 「传输状态」标题行：折叠开关。点击切换展开/收起；传输进行时由 statusVisible 强制展开。
+    private var statusHeader: some View {
+        HStack(spacing: 6) {
+            Button {
+                statusExpanded.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    // 单个箭头随展开状态旋转（▶→▼），与高度动画同一事务，避免硬切换图标。
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(statusVisible ? 90 : 0))
+                    Text("传输状态").font(.subheadline.weight(.semibold))
+                    if !statusVisible && app.engine.queueTotal > 0 {
+                        Text("· 上次 \(app.engine.queueIndex)/\(app.engine.queueTotal)")
+                            .font(.caption).monospacedDigit().foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help(statusExpanded ? "收起（传输时会自动展开）" : "展开")
+            Spacer()
+        }
+    }
+
+    /// 展开后的明细：当前文件名 + 总进度 + 进度条 + 日志。整体作为一个过渡单元。
+    private var statusDetail: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(app.engine.isRunning ? app.engine.currentName : "等待传输…")
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if app.engine.queueTotal > 0 {
+                    Text("总进度 \(app.engine.queueIndex) / \(app.engine.queueTotal)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ProgressView(value: progressFraction)
+            logView
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var progressFraction: Double {
@@ -204,6 +237,14 @@ struct ContentView: View {
                 if count > 0 { proxy.scrollTo(count - 1, anchor: .bottom) }
             }
         }
+    }
+}
+
+/// 测量「传输状态」明细的自然高度，供折叠动画在 0 ↔ 自然高度间插值。
+private struct DetailHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
