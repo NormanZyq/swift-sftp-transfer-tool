@@ -53,8 +53,13 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
     @State private var scroll = TabScrollModel()
     @State private var monitor: Any? = nil
 
-    /// tab 栏背景：用 window 背景色（浅灰），与白色文件面板形成对比，活动 tab 再用白色"浮起"。
-    private let barColor = Color(nsColor: .windowBackgroundColor)
+    /// tab 栏背景：旧系统接近 Finder 的浅灰工具栏；macOS 26+ 走更轻的材质感。
+    private var barColor: Color {
+        if #available(macOS 26.0, *) {
+            return Color(nsColor: .windowBackgroundColor).opacity(0.72)
+        }
+        return Color(nsColor: .windowBackgroundColor)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -62,11 +67,11 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
                 .frame(maxWidth: .infinity, alignment: .leading)
             addSection
         }
-        .frame(height: 30)
-        .background(barColor)
+        .frame(height: 32)
+        .background(tabBarBackground)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.5))
+                .fill(Color(nsColor: .separatorColor).opacity(0.42))
                 .frame(height: 0.5)
         }
         .onHover { scroll.isHovering = $0 }
@@ -77,12 +82,23 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
         }
     }
 
+    @ViewBuilder
+    private var tabBarBackground: some View {
+        if #available(macOS 26.0, *) {
+            Rectangle()
+                .fill(.regularMaterial)
+                .overlay(barColor)
+        } else {
+            barColor
+        }
+    }
+
     // MARK: 可滚动的 tab 行
 
     private var scrollingTabs: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                HStack(spacing: 4) {
+                HStack(alignment: .bottom, spacing: 1) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         TabChip(
                             title: title(item),
@@ -109,7 +125,8 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
                         )
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 6)
+                .padding(.top, 4)
                 .coordinateSpace(name: "tabContent")
                 .background(
                     GeometryReader { g in
@@ -170,14 +187,14 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
     private var addSection: some View {
         HStack(spacing: 0) {
             Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.5))
-                .frame(width: 0.5, height: 16)
-                .padding(.leading, 2)
+                .fill(Color(nsColor: .separatorColor).opacity(0.38))
+                .frame(width: 0.5, height: 18)
+                .padding(.leading, 3)
             addLabel()
-                .padding(.horizontal, 5)
+                .padding(.horizontal, 6)
         }
         .frame(maxHeight: .infinity)
-        .background(barColor)
+        .background(tabBarBackground)
     }
 
     // MARK: 滚轮 → 横向滚动
@@ -210,7 +227,7 @@ private struct TabCentersKey: PreferenceKey {
     }
 }
 
-/// 单个 tab 芯片：活动态用白色"浮起"于灰底 tab 栏之上，并加细描边；闲置态透明、显示底色。
+/// 单个 tab：贴近 Finder 的标签页外观，选中项与下方内容面板相连。
 private struct TabChip<Title: View, Accessory: View>: View {
     let title: Title
     let accessory: Accessory
@@ -230,11 +247,11 @@ private struct TabChip<Title: View, Accessory: View>: View {
             if showClose, let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14, height: 14)
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(closeColor)
+                        .frame(width: 15, height: 15)
                         .background(
-                            Circle().fill(Color.primary.opacity(isHovered ? 0.12 : 0))
+                            Circle().fill(Color.primary.opacity(isHovered ? 0.10 : 0))
                         )
                         .contentShape(Circle())
                 }
@@ -243,30 +260,79 @@ private struct TabChip<Title: View, Accessory: View>: View {
                 .help("关闭")
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
+        .padding(.leading, 10)
+        .padding(.trailing, showClose ? 5 : 10)
+        .padding(.vertical, 5)
         .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .frame(height: 28)
         .background(
-            RoundedRectangle(cornerRadius: 5)
+            tabShape
                 .fill(fillColor)
-                .shadow(color: .black.opacity(isSelected ? 0.06 : 0),
-                        radius: 1.5, y: 0.5)
+                .shadow(color: .black.opacity(selectedShadowOpacity),
+                        radius: isSelected ? 2.5 : 0,
+                        y: isSelected ? 0.8 : 0)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 5)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(isSelected ? 0.7 : 0),
-                              lineWidth: 0.5)
+            tabShape
+                .strokeBorder(strokeColor, lineWidth: 0.6)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 5))
+        .overlay(alignment: .bottom) {
+            if isSelected {
+                Rectangle()
+                    .fill(Color(nsColor: .textBackgroundColor))
+                    .frame(height: 1)
+            }
+        }
+        .contentShape(tabShape)
         .onTapGesture(perform: onTap)
         .onHover(perform: onHover)
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    private var tabShape: some InsettableShape {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 7,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: 7,
+            style: .continuous
+        )
+    }
+
     private var fillColor: Color {
-        if isSelected { return Color(nsColor: .textBackgroundColor) }   // 白：与下方面板同色，"浮起"于灰底
-        if isHovered  { return Color.primary.opacity(0.06) }
+        if isSelected {
+            if #available(macOS 26.0, *) {
+                return Color(nsColor: .textBackgroundColor).opacity(0.88)
+            }
+            return Color(nsColor: .textBackgroundColor)
+        }
+        if isHovered {
+            if #available(macOS 26.0, *) {
+                return Color.primary.opacity(0.075)
+            }
+            return Color.primary.opacity(0.055)
+        }
         return .clear
+    }
+
+    private var strokeColor: Color {
+        if isSelected {
+            return Color(nsColor: .separatorColor).opacity(0.72)
+        }
+        if isHovered {
+            return Color(nsColor: .separatorColor).opacity(0.32)
+        }
+        return .clear
+    }
+
+    private var selectedShadowOpacity: Double {
+        if #available(macOS 26.0, *) { return 0.08 }
+        return 0.045
+    }
+
+    private var closeColor: Color {
+        if isHovered || isSelected { return .secondary }
+        return Color.secondary.opacity(0.75)
     }
 }
 
@@ -426,18 +492,33 @@ private struct DuplicateRemoteHostPopover: View {
 /// `+` 按钮的统一外观（本地 / 远程两侧共用，确保完全一致）。
 private struct AddGlyph: View {
     let hovered: Bool
-    var body: some View {
-        Image(systemName: "plus")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 22, height: 20)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(hovered ? 0.10 : 0))
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 5))
-    }
-}
+	    var body: some View {
+	        Image(systemName: "plus")
+	            .font(.system(size: 10.5, weight: .semibold))
+	            .foregroundStyle(.secondary)
+	            .frame(width: 24, height: 22)
+	            .background(
+	                RoundedRectangle(cornerRadius: 6, style: .continuous)
+	                    .fill(addFill)
+	            )
+	            .overlay(
+	                RoundedRectangle(cornerRadius: 6, style: .continuous)
+	                    .strokeBorder(Color(nsColor: .separatorColor).opacity(hovered ? 0.28 : 0),
+	                                  lineWidth: 0.6)
+	            )
+	            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+	    }
+
+	    private var addFill: Color {
+	        if hovered {
+	            if #available(macOS 26.0, *) {
+	                return Color.primary.opacity(0.095)
+	            }
+	            return Color.primary.opacity(0.075)
+	        }
+	        return .clear
+	    }
+	}
 
 /// 普通 `+` 按钮（用于本地 tab 栏）。
 private struct AddButton: View {
