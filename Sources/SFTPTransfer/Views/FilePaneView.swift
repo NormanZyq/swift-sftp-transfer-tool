@@ -214,14 +214,14 @@ struct FilePaneView: View {
         if pane.isRemote {
             // 远程面板：接收来自本地 / 访达的 URL → 上传。
             tableCore.dropDestination(for: URL.self) { urls, _ in
-                guard app.isConnected else { return false }
+                guard app.isActiveRemoteTabConnected else { return false }
                 app.dropLocalPaths(urls.map(\.path), toRemoteDir: pane.currentPath)
                 return true
             }
         } else {
             // 本地面板：接收来自远程面板的条目 → 下载。
             tableCore.dropDestination(for: RemoteItemRef.self) { refs, _ in
-                guard app.isConnected else { return false }
+                guard app.isActiveRemoteTabConnected else { return false }
                 app.dropRemoteItems(refs, toLocalDir: pane.currentPath)
                 return true
             }
@@ -236,7 +236,7 @@ struct FilePaneView: View {
                 .disabled(targets.isEmpty)
         } else {
             Button("上传") { pane.selection = ids; app.uploadSelection() }
-                .disabled(targets.isEmpty || !app.isConnected)
+                .disabled(targets.isEmpty || !app.isActiveRemoteTabConnected)
         }
         if !pane.isRemote, !targets.isEmpty {
             Button("在访达中打开") { LocalFileSystem.revealInFinder(targets.map(\.path)) }

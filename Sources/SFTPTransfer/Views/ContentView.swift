@@ -15,23 +15,25 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var app = app
-
-        VStack(spacing: 8) {
+        return VStack(spacing: 8) {
             topBar
             HSplitView {
-                FilePaneView(pane: app.local)
-                    .frame(minWidth: 360)
-                FilePaneView(pane: app.remote)
-                    .frame(minWidth: 360)
+                paneSide(
+                    tabBar: LocalTabBarView(),
+                    pane: app.activeLocalPane
+                )
+                .frame(minWidth: 360)
+                paneSide(
+                    tabBar: RemoteTabBarView(),
+                    pane: app.activeRemoteTab?.pane
+                )
+                .frame(minWidth: 360)
             }
             .frame(maxHeight: .infinity)
             transferButtons
             statusSection
         }
         .padding(10)
-        // 统一收口：手动点击（statusExpanded）与传输自动展开/收起（isRunning）都汇入 statusVisible，
-        // 由这一个修饰符驱动整块布局——底部传输状态盒的高度、箭头旋转，以及上方文件列表面板
-        // 随之改变的高度——按同一曲线一起平滑回流，避免盒子伸缩而面板高度生硬跳变。
         .animation(.easeInOut(duration: 0.26), value: statusVisible)
         // 结果提醒：底部一角轻量 toast，自动淡出
         .overlay(alignment: .bottomTrailing) {
@@ -76,45 +78,74 @@ struct ContentView: View {
         }
     }
 
+    /// 一侧 = tab 栏 + 文件面板；面板可能为 nil（理论上不会发生，留作安全兜底）。
+    @ViewBuilder
+    private func paneSide<TabBar: View>(tabBar: TabBar, pane: PaneModel?) -> some View {
+        VStack(spacing: 0) {
+            tabBar
+            if let pane {
+                FilePaneView(pane: pane)
+            } else {
+                Color(nsColor: .textBackgroundColor)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: 顶栏
+
     private var topBar: some View {
         @Bindable var app = app
         return HStack(spacing: 10) {
             Text("服务器")
-            Picker("", selection: $app.selectedHostID) {
+            Picker("", selection: Binding(
+                get: { app.selectedHostID },
+                set: { app.selectHost($0) }
+            )) {
+                Text("（无）").tag(Optional<HostEntry.ID>.none)
                 ForEach(app.hosts) { host in
                     Text(host.display).tag(Optional(host.id))
                 }
             }
             .labelsHidden()
             .frame(maxWidth: 360)
-            .disabled(app.state != .disconnected)
 
-            if app.state == .connected {
+            if let tab = app.activeRemoteTab, tab.state == .connected {
                 Button("断开") { app.disconnect() }
             } else {
-                Button("连接") { app.connect() }
-                    .disabled(app.selectedHost == nil || app.state == .connecting)
+                Button(app.activeRemoteTab?.state == .connecting ? "连接中…" : "连接") {
+                    app.connect()
+                }
+                .disabled(!app.canConnect)
             }
-
-            if app.state == .connecting { ProgressView().controlSize(.small) }
+            if app.activeRemoteTab?.state == .connecting { ProgressView().controlSize(.small) }
 
             Spacer()
 
             Circle()
                 .fill(statusColor)
                 .frame(width: 10, height: 10)
-            Text(app.statusText)
+            Text(app.activeRemoteTab?.statusText ?? "未连接")
                 .foregroundStyle(.secondary)
         }
     }
 
     private var statusColor: Color {
-        switch app.state {
-        case .disconnected: return .gray
-        case .connecting:   return .orange
+        switch app.activeRemoteTab?.state {
         case .connected:    return .green
+        case .connecting:   return .orange
+        case .disconnected: return .gray
+        case .none:         return .gray
         }
     }
+
+    // MARK: 传输按钮
 
     private var transferButtons: some View {
         HStack {
@@ -124,14 +155,18 @@ struct ContentView: View {
             } label: {
                 Label("上传选中", systemImage: "arrow.right")
             }
-            .disabled(!app.isConnected || app.engine.isRunning || app.local.selection.isEmpty)
+            .disabled(!app.isActiveRemoteTabConnected
+                      || app.engine.isRunning
+                      || (app.activeLocalPane?.selection.isEmpty ?? true))
 
             Button {
                 app.downloadSelection()
             } label: {
                 Label("下载选中", systemImage: "arrow.left")
             }
-            .disabled(!app.isConnected || app.engine.isRunning || app.remote.selection.isEmpty)
+            .disabled(!app.isActiveRemoteTabConnected
+                      || app.engine.isRunning
+                      || (app.activeRemoteTab?.pane.selection.isEmpty ?? true))
 
             Button(role: .cancel) {
                 app.cancelTransfer()
@@ -143,13 +178,12 @@ struct ContentView: View {
         }
     }
 
+    // MARK: 传输状态栏
+
     private var statusSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 0) {
                 statusHeader
-                // 折叠区：用真实布局高度（测量得到的自然高度）在 0 ↔ 自然高度之间做动画。
-                // 这样外框每一帧都有一个确切的中间高度可贴合，于是「向下展开 / 向上收起」是连续的，
-                // 而不是外框瞬间跳到目标高度、只有内部内容在动（.transition 只动绘制、不动布局高度）。
                 statusDetail
                     .padding(.top, 6)
                     .background(
@@ -165,18 +199,15 @@ struct ContentView: View {
             }
             .padding(4)
         }
-        // 测得自然高度后回填；该变化本身不被动画（动画只盯 statusVisible），故不会在测量时抖动。
         .onPreferenceChange(DetailHeightKey.self) { detailHeight = $0 }
     }
 
-    /// 「传输状态」标题行：折叠开关。点击切换展开/收起；传输进行时由 statusVisible 强制展开。
     private var statusHeader: some View {
         HStack(spacing: 6) {
             Button {
                 statusExpanded.toggle()
             } label: {
                 HStack(spacing: 4) {
-                    // 单个箭头随展开状态旋转（▶→▼），与高度动画同一事务，避免硬切换图标。
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .rotationEffect(.degrees(statusVisible ? 90 : 0))
@@ -193,7 +224,6 @@ struct ContentView: View {
         }
     }
 
-    /// 展开后的明细：当前文件名 + 总进度 + 进度条 + 日志。整体作为一个过渡单元。
     private var statusDetail: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {

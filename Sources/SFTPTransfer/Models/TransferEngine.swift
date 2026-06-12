@@ -3,6 +3,9 @@ import Observation
 
 /// 传输引擎：接收上传/下载请求，递归展开目录，按顺序经由唯一 SFTP 通道传输，
 /// 并发布每文件 / 队列进度与日志。
+///
+/// 多 tab 模式下不同远程 tab 拥有各自的 SFTPSession；每次传输由调用方传入
+/// 对应 session，全局日志 / 进度 / 最近结果继续保留（同一时刻仍只跑一个传输）。
 @MainActor
 @Observable
 final class TransferEngine {
@@ -35,8 +38,7 @@ final class TransferEngine {
         let id = UUID()
     }
 
-    private let session: SFTPSession
-    init(session: SFTPSession) { self.session = session }
+    init() {}
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -50,8 +52,8 @@ final class TransferEngine {
         if log.count > 500 { log.removeFirst(log.count - 500) }
     }
 
-    /// 执行一批传输请求。
-    func run(_ requests: [Request]) async {
+    /// 执行一批传输请求，使用调用方指定的 session。
+    func run(_ requests: [Request], session: SFTPSession) async {
         guard !isRunning else { return }
         isRunning = true
         defer {
@@ -64,7 +66,7 @@ final class TransferEngine {
         var failed = 0
         for r in requests {
             do {
-                tasks += try await expand(r)
+                tasks += try await expand(r, session: session)
             } catch {
                 appendLog("✗ 展开失败 \((r.srcPath as NSString).lastPathComponent): \(error.localizedDescription)")
                 failed += 1
@@ -136,7 +138,7 @@ final class TransferEngine {
     }
 
     /// 把一个请求展开成具体的文件任务（目录递归）。
-    private func expand(_ r: Request) async throws -> [FileTask] {
+    private func expand(_ r: Request, session: SFTPSession) async throws -> [FileTask] {
         if !r.isDirectory {
             return [FileTask(direction: r.direction, src: r.srcPath, dst: r.dstPath)]
         }

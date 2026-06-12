@@ -4,7 +4,10 @@ import Observation
 /// 一个文件面板的状态与操作（本地或远程通用）。
 @MainActor
 @Observable
-final class PaneModel {
+final class PaneModel: Identifiable {
+    /// 面板实例的唯一标识（多 tab 场景下，SwiftUI ForEach 需要）。
+    let id = UUID()
+
     enum Kind: Sendable { case local, remote }
 
     let kind: Kind
@@ -35,23 +38,31 @@ final class PaneModel {
 
     weak var app: AppModel?
 
+    /// 仅远程面板使用：所属 RemoteTab 的 SFTPSession（多 tab 模式下各 tab 自己的通道）。
+    /// 本地面板忽略此字段。
+    var remoteSession: SFTPSession? {
+        didSet { /* 仅供视图层观察以触发刷新；远程 I/O 路径直接读最新值 */ }
+    }
+
     init(kind: Kind) { self.kind = kind }
 
+    /// 远程面板的标题由所属 tab 显式设置（"user@host:port" 之类），没设时退回 "远程"。
+    /// 本地面板的标题永远是 "本地"。
+    var remoteTitle: String?
     var title: String {
         switch kind {
         case .local: return "本地"
-        case .remote:
-            if let host = app?.selectedHost, app?.isConnected == true {
-                return "远程 — \(host.user)@\(host.alias)"
-            }
-            return "远程"
+        case .remote: return remoteTitle ?? "远程"
         }
     }
 
     var isRemote: Bool { kind == .remote }
 
+    /// 本地面板始终可用；远程面板只在其所属 tab 当前活跃且已连接时可用。
+    /// 多 tab 模式下由 AppModel 在切换 tab 时刷新此值。
     var isEnabled: Bool {
-        kind == .local || app?.isConnected == true
+        if kind == .local { return true }
+        return app?.isActiveRemoteTabConnected == true
     }
 
     /// 当前展示的条目。
@@ -97,10 +108,10 @@ final class PaneModel {
             items = LocalFileSystem.list(currentPath, showHidden: true) // 全部取回，显示时再按开关过滤
             selection = []
         case .remote:
-            guard let app, app.isConnected else { items = []; return }
+            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { items = []; return }
             isLoading = true
             do {
-                items = try await app.session.list(currentPath)
+                items = try await session.list(currentPath)
             } catch {
                 app.engine.appendLog("✗ 无法列出 \(currentPath): \(error.localizedDescription)")
                 items = []
@@ -169,9 +180,9 @@ final class PaneModel {
         case .local:
             navigate(to: LocalFileSystem.home)
         case .remote:
-            guard let app, app.isConnected else { return }
+            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { return }
             Task {
-                if let home = try? await app.session.homeDirectory() { navigate(to: home) }
+                if let home = try? await session.homeDirectory() { navigate(to: home) }
             }
         }
     }
@@ -193,9 +204,9 @@ final class PaneModel {
                 LocalFileSystem.search(in: dir, query: query, includeHidden: hidden)
             }.value
         case .remote:
-            guard let app, app.isConnected else { searchResults = []; return }
+            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { searchResults = []; return }
             do {
-                searchResults = try await app.session.search(in: dir, query: query, includeHidden: hidden)
+                searchResults = try await session.search(in: dir, query: query, includeHidden: hidden)
             } catch {
                 app.engine.appendLog("✗ 搜索失败：\(error.localizedDescription)")
                 searchResults = []
@@ -218,8 +229,8 @@ final class PaneModel {
                 case .local:
                     try LocalFileSystem.makeDirectory(in: currentPath, name: trimmed)
                 case .remote:
-                    guard let app else { return }
-                    try await app.session.makeDirectory(at: SFTPSession.join(currentPath, trimmed))
+                    guard let session = remoteSession, app != nil else { return }
+                    try await session.makeDirectory(at: SFTPSession.join(currentPath, trimmed))
                 }
                 await reload()
             } catch {
@@ -237,9 +248,9 @@ final class PaneModel {
                 case .local:
                     try LocalFileSystem.rename(at: item.path, to: trimmed)
                 case .remote:
-                    guard let app else { return }
+                    guard let session = remoteSession, app != nil else { return }
                     let dst = SFTPSession.join((item.path as NSString).deletingLastPathComponent, trimmed)
-                    try await app.session.rename(from: item.path, to: dst)
+                    try await session.rename(from: item.path, to: dst)
                 }
                 await reload()
             } catch {
@@ -257,8 +268,8 @@ final class PaneModel {
                     case .local:
                         try LocalFileSystem.moveToTrash(item.path)
                     case .remote:
-                        guard let app else { return }
-                        try await app.session.remove(path: item.path, isDirectory: item.isDirectory)
+                        guard let session = remoteSession else { return }
+                        try await session.remove(path: item.path, isDirectory: item.isDirectory)
                     }
                 } catch {
                     app?.errorMessage = "删除「\(item.name)」失败：\(error.localizedDescription)"
