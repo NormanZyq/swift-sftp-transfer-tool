@@ -1,15 +1,29 @@
 import Foundation
 
-/// 一个解析后的 SSH 主机配置。
-struct HostEntry: Identifiable, Hashable, Sendable {
+/// 一个解析后的 SSH 主机配置，或用户在应用内保存的服务器配置。
+struct HostEntry: Identifiable, Hashable, Codable, Sendable {
+    enum Source: String, Codable, Sendable {
+        case sshConfig
+        case manual
+    }
+
+    enum Authentication: String, Codable, Sendable {
+        case privateKey
+        case password
+    }
+
+    var customID: String?
     var alias: String
     var hostName: String
     var user: String
     var port: Int
     var identityFile: String?
+    var source: Source = .sshConfig
+    var authentication: Authentication = .privateKey
 
-    var id: String { alias }
+    var id: String { customID ?? "ssh:\(alias)" }
     var display: String { "\(alias)  —  \(user)@\(hostName):\(port)" }
+    var isEditable: Bool { source == .manual }
 }
 
 /// `~/.ssh/config` 的子集解析（Host / HostName / User / Port / IdentityFile）。
@@ -66,7 +80,9 @@ enum SSHConfig {
             hostName: hostName ?? alias,
             user: user ?? defaultUser,
             port: port ?? 22,
-            identityFile: identity
+            identityFile: identity,
+            source: .sshConfig,
+            authentication: .privateKey
         )
     }
 

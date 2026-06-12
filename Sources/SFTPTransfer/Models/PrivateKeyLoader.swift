@@ -31,7 +31,12 @@ enum PrivateKeyLoader {
 
     /// 不确定是否需要口令时，先传 `passphrase: nil`；若抛 `.needsPassphrase`，
     /// 再向用户索要后用口令重试。
-    static func authMethod(for host: HostEntry, passphrase: String?) throws -> SSHAuthenticationMethod {
+    static func authMethod(for host: HostEntry, passphrase: String?, passwordOverride: String? = nil) throws -> SSHAuthenticationMethod {
+        if host.authentication == .password {
+            let password = try passwordOverride ?? PasswordVault.password(for: host.id)
+            return .passwordBased(username: host.user, password: password)
+        }
+
         let path = resolveIdentityPath(for: host)
         guard FileManager.default.fileExists(atPath: path) else {
             throw PrivateKeyError.fileNotFound(path)

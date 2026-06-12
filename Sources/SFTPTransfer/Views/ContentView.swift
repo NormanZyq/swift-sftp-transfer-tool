@@ -60,6 +60,10 @@ struct ContentView: View {
                             onSubmit: { app.submitPassphrase($0) },
                             onCancel: { app.passphrasePrompt = nil })
         }
+        // 服务器配置
+        .sheet(isPresented: $app.serverConfigPresented) {
+            ServerConfigView()
+        }
         // 未知主机 TOFU 确认
         .alert("未知主机", isPresented: Binding(get: { app.hostKeyPrompt != nil },
                                           set: { if !$0 { app.cancelUnknownHost() } }),
@@ -115,6 +119,13 @@ struct ContentView: View {
             }
             .labelsHidden()
             .frame(maxWidth: 360)
+
+            Button {
+                app.serverConfigPresented = true
+            } label: {
+                Label("配置服务器", systemImage: "slider.horizontal.3")
+            }
+            .help("配置服务器")
 
             if let tab = app.activeRemoteTab, tab.state == .connected {
                 Button("断开") { app.disconnect() }

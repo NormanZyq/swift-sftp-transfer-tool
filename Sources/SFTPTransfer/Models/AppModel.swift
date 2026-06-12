@@ -17,6 +17,8 @@ final class AppModel {
     /// picker 当前选中的主机 ID。始终与活跃远程 tab 的 host 保持一致：
     /// tab 切换 / 关闭 / 新增时由对应路径同步更新。
     var selectedHostID: HostEntry.ID?
+    var serverConfigPresented = false
+    private var serverCatalog = StoredServerCatalog()
 
     // MARK: Tab 集合
     /// 左侧本地 tab 列表与当前选中。
@@ -39,7 +41,7 @@ final class AppModel {
     private var transferTask: Task<Void, Never>?
 
     init() {
-        hosts = SSHConfig.loadHosts()
+        loadServerCatalog()
         selectedHostID = hosts.first?.id
 
         // 初始：1 个本地 tab，定位到主目录；1 个空远程 tab（用户随后从 picker 选主机）
@@ -47,6 +49,126 @@ final class AppModel {
         addRemoteTab()
         if let firstHost = hosts.first {
             assignHostToActiveRemoteTab(firstHost)
+        }
+    }
+
+    // MARK: 服务器配置
+
+    func refreshSSHConfigHosts() {
+        rebuildHosts()
+        saveServerCatalog()
+        engine.appendLog("已刷新 ~/.ssh/config 服务器条目")
+    }
+
+    func saveManualHost(_ host: HostEntry, password: String?) throws {
+        var saved = host
+        saved.customID = host.customID ?? UUID().uuidString
+        saved.source = .manual
+        saved.authentication = .password
+        saved.identityFile = nil
+
+        if let password, !password.isEmpty {
+            try PasswordVault.savePassword(password, for: saved.id)
+        } else if !serverCatalog.manualHosts.contains(where: { $0.id == saved.id }) {
+            throw PasswordVaultError.missingPassword
+        }
+
+        if let idx = serverCatalog.manualHosts.firstIndex(where: { $0.id == saved.id }) {
+            serverCatalog.manualHosts[idx] = saved
+        } else {
+            serverCatalog.manualHosts.append(saved)
+            serverCatalog.order.append(saved.id)
+        }
+
+        rebuildHosts()
+        saveServerCatalog()
+    }
+
+    func deleteManualHost(_ id: HostEntry.ID) {
+        guard let host = hosts.first(where: { $0.id == id }), host.isEditable else { return }
+        serverCatalog.manualHosts.removeAll { $0.id == id }
+        serverCatalog.order.removeAll { $0 == id }
+        try? PasswordVault.deletePassword(for: id)
+        rebuildHosts()
+        saveServerCatalog()
+    }
+
+    func moveHost(_ id: HostEntry.ID, by delta: Int) {
+        guard let from = hosts.firstIndex(where: { $0.id == id }) else { return }
+        let to = max(0, min(hosts.count - 1, from + delta))
+        guard from != to else { return }
+        let host = hosts.remove(at: from)
+        hosts.insert(host, at: to)
+        serverCatalog.order = hosts.map(\.id)
+        saveServerCatalog()
+    }
+
+    func moveHosts(fromOffsets: IndexSet, toOffset: Int) {
+        let moving = fromOffsets.sorted()
+        guard !moving.isEmpty else { return }
+        let movedHosts = moving.map { hosts[$0] }
+        for index in moving.reversed() {
+            hosts.remove(at: index)
+        }
+        let removedBeforeDestination = moving.filter { $0 < toOffset }.count
+        let insertion = max(0, min(hosts.count, toOffset - removedBeforeDestination))
+        hosts.insert(contentsOf: movedHosts, at: insertion)
+        serverCatalog.order = hosts.map(\.id)
+        saveServerCatalog()
+    }
+
+    func hostPassword(_ id: HostEntry.ID) -> String? {
+        try? PasswordVault.password(for: id)
+    }
+
+    func testConnection(host: HostEntry, password: String?) async -> Result<Void, Error> {
+        do {
+            let auth = try PrivateKeyLoader.authMethod(for: host, passphrase: nil, passwordOverride: password)
+            let known = KnownHosts.trustedKeys(host: host.hostName, port: host.port)
+            let validator = KnownHostsValidator(host: host.hostName, port: host.port, known: known)
+            let session = SFTPSession()
+            do {
+                try await session.connect(host: host, auth: auth, validator: validator)
+                _ = try? await session.homeDirectory()
+                await session.disconnect()
+                return .success(())
+            } catch {
+                await session.disconnect()
+                if case .unknown(let info) = validator.outcome { return .failure(info) }
+                if case .mismatch(let mismatch) = validator.outcome { return .failure(mismatch) }
+                return .failure(error)
+            }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private func loadServerCatalog() {
+        serverCatalog = ServerStore.load()
+        rebuildHosts()
+    }
+
+    private func rebuildHosts() {
+        let sshHosts = SSHConfig.loadHosts()
+        hosts = ServerStore.merged(
+            sshHosts: sshHosts,
+            manualHosts: serverCatalog.manualHosts,
+            order: serverCatalog.order
+        )
+        serverCatalog.order = hosts.map(\.id)
+        if let selectedHostID, hosts.contains(where: { $0.id == selectedHostID }) {
+            return
+        }
+        selectedHostID = activeRemoteTab?.host.flatMap { active in
+            hosts.first(where: { $0.id == active.id })?.id
+        } ?? hosts.first?.id
+    }
+
+    private func saveServerCatalog() {
+        do {
+            try ServerStore.save(serverCatalog)
+        } catch {
+            fail(error)
         }
     }
 
