@@ -12,6 +12,13 @@ enum SFTPSessionError: LocalizedError {
     }
 }
 
+struct RemoteItemProperties: Sendable {
+    let item: FileItem
+    let totalSize: UInt64
+    let fileCount: Int
+    let directoryCount: Int
+}
+
 /// 封装一条 SSH/SFTP 连接。用 actor 串行化对唯一 SFTP 通道的访问
 /// （取代 Python 版「同一时刻只允许一个线程使用通道」的手动约束）。
 actor SFTPSession {
@@ -123,6 +130,43 @@ actor SFTPSession {
             }
         }
         return out
+    }
+
+    /// 远程条目属性。目录大小需要递归统计，可能耗时；调用方应异步展示进度。
+    func properties(for item: FileItem) async throws -> RemoteItemProperties {
+        if !item.isDirectory {
+            return RemoteItemProperties(item: item, totalSize: item.size, fileCount: 1, directoryCount: 0)
+        }
+
+        let stats = try await directoryStats(item.path)
+        return RemoteItemProperties(
+            item: item,
+            totalSize: stats.size,
+            fileCount: stats.files,
+            directoryCount: stats.directories
+        )
+    }
+
+    private func directoryStats(_ dir: String) async throws -> (size: UInt64, files: Int, directories: Int) {
+        var total: UInt64 = 0
+        var files = 0
+        var directories = 0
+
+        for child in try await list(dir) {
+            try Task.checkCancellation()
+            if child.isDirectory {
+                directories += 1
+                let childStats = try await directoryStats(child.path)
+                total += childStats.size
+                files += childStats.files
+                directories += childStats.directories
+            } else {
+                total += child.size
+                files += 1
+            }
+        }
+
+        return (total, files, directories)
     }
 
     /// 在 dir 下递归查找名称包含 query（不区分大小写）的条目（文件与目录均含），最多 limit 条。

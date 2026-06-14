@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// 单个文件面板（本地或远程通用）：路径栏 + 搜索 + 多选表格 + 右键菜单。
 struct FilePaneView: View {
@@ -12,6 +13,14 @@ struct FilePaneView: View {
     @State private var renameText = ""
     @State private var deleteTargets: [FileItem] = []
     @State private var deletePresented = false
+    @State private var propertyTarget: FileItem?
+    @State private var propertyState: RemotePropertyState = .idle
+    @State private var propertyTask: Task<Void, Never>?
+    @State private var quickPropertyTarget: FileItem?
+    @State private var quickPropertyState: RemotePropertyState = .idle
+    @State private var quickPropertyTask: Task<Void, Never>?
+    @State private var quickKeyMonitor: Any?
+    @State private var isHoveringForQuickProperties = false
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -27,8 +36,28 @@ struct FilePaneView: View {
         }
         .padding(6)
         .disabled(!pane.isEnabled)
-        .onAppear { pathField = pane.currentPath }
+        .overlay(alignment: .topTrailing) {
+            if let quickPropertyTarget {
+                RemoteQuickPropertyPanel(item: quickPropertyTarget, state: quickPropertyState)
+                    .padding(12)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.spring(response: 0.24, dampingFraction: 0.88), value: quickPropertyTarget?.id)
+        .onHover { isHoveringForQuickProperties = $0 }
+        .onAppear {
+            pathField = pane.currentPath
+            installQuickPropertyMonitor()
+        }
+        .onDisappear {
+            removeQuickPropertyMonitor()
+            closeQuickPropertyPanel()
+        }
         .onChange(of: pane.currentPath) { _, newValue in pathField = newValue }
+        .onChange(of: pane.selection) { _, _ in
+            refreshQuickPropertyPanelForSelection()
+        }
         .alert("新建文件夹", isPresented: $newFolderPresented) {
             TextField("名称", text: $newFolderName)
             Button("创建") { pane.makeFolder(named: newFolderName) }
@@ -49,6 +78,15 @@ struct FilePaneView: View {
                 deleteTargets = []
             }
             Button("取消", role: .cancel) { deleteTargets = [] }
+        }
+        .sheet(item: $propertyTarget, onDismiss: {
+            propertyTask?.cancel()
+            propertyTask = nil
+            propertyState = .idle
+        }) { item in
+            RemotePropertySheet(item: item, state: propertyState) {
+                propertyTarget = nil
+            }
         }
     }
 
@@ -234,6 +272,9 @@ struct FilePaneView: View {
         if pane.isRemote {
             Button("下载") { pane.selection = ids; app.downloadSelection() }
                 .disabled(targets.isEmpty)
+            if targets.count == 1, let only = targets.first {
+                Button("查看属性…") { showRemoteProperties(for: only) }
+            }
         } else {
             Button("上传") { pane.selection = ids; app.uploadSelection() }
                 .disabled(targets.isEmpty || !app.isActiveRemoteTabConnected)
@@ -256,6 +297,116 @@ struct FilePaneView: View {
         }
     }
 
+    private func showRemoteProperties(for item: FileItem) {
+        propertyTask?.cancel()
+        propertyTarget = item
+        propertyState = .loading
+        guard let session = pane.remoteSession else {
+            propertyState = .failed("尚未连接到服务器")
+            return
+        }
+
+        propertyTask = Task {
+            do {
+                let properties = try await session.properties(for: item)
+                guard !Task.isCancelled else { return }
+                propertyState = .loaded(properties)
+            } catch is CancellationError {
+                // sheet 关闭时取消即可，不需要打扰用户。
+            } catch {
+                guard !Task.isCancelled else { return }
+                propertyState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func installQuickPropertyMonitor() {
+        guard quickKeyMonitor == nil else { return }
+        quickKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard shouldHandleQuickPropertyKey(event) else { return event }
+            if !event.isARepeat {
+                Task { @MainActor in toggleQuickPropertyPanel() }
+            }
+            return nil
+        }
+    }
+
+    private func removeQuickPropertyMonitor() {
+        if let quickKeyMonitor {
+            NSEvent.removeMonitor(quickKeyMonitor)
+            self.quickKeyMonitor = nil
+        }
+    }
+
+    private func shouldHandleQuickPropertyKey(_ event: NSEvent) -> Bool {
+        guard pane.isRemote, pane.isEnabled, isHoveringForQuickProperties else { return false }
+        guard event.charactersIgnoringModifiers == " " else { return false }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.isEmpty else { return false }
+        guard !isTextInputActive() else { return false }
+        return true
+    }
+
+    private func isTextInputActive() -> Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        return responder is NSTextView || responder is NSTextField
+    }
+
+    private func toggleQuickPropertyPanel() {
+        if quickPropertyTarget != nil {
+            closeQuickPropertyPanel()
+            return
+        }
+        guard let item = singleSelectedDisplayedItem() else { return }
+        showQuickProperties(for: item)
+    }
+
+    private func refreshQuickPropertyPanelForSelection() {
+        guard quickPropertyTarget != nil else { return }
+        guard let item = singleSelectedDisplayedItem() else {
+            closeQuickPropertyPanel()
+            return
+        }
+        if quickPropertyTarget?.id != item.id {
+            showQuickProperties(for: item)
+        }
+    }
+
+    private func singleSelectedDisplayedItem() -> FileItem? {
+        guard pane.selection.count == 1, let id = pane.selection.first else { return nil }
+        return pane.displayedItems.first { $0.id == id }
+    }
+
+    private func showQuickProperties(for item: FileItem) {
+        quickPropertyTask?.cancel()
+        quickPropertyTarget = item
+        quickPropertyState = .loading
+        guard let session = pane.remoteSession else {
+            quickPropertyState = .failed("尚未连接到服务器")
+            return
+        }
+
+        quickPropertyTask = Task {
+            do {
+                let properties = try await session.properties(for: item)
+                guard !Task.isCancelled else { return }
+                quickPropertyState = .loaded(properties)
+            } catch is CancellationError {
+                // 选择变化或再次按空格时取消即可。
+            } catch {
+                guard !Task.isCancelled else { return }
+                quickPropertyState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func closeQuickPropertyPanel() {
+        quickPropertyTask?.cancel()
+        quickPropertyTask = nil
+        quickPropertyTarget = nil
+        quickPropertyState = .idle
+    }
+
     private var deleteMessage: String {
         if deleteTargets.count == 1 {
             return pane.isRemote ? "确定删除「\(deleteTargets[0].name)」？此操作不可撤销。"
@@ -263,5 +414,187 @@ struct FilePaneView: View {
         }
         return pane.isRemote ? "确定删除选中的 \(deleteTargets.count) 项？此操作不可撤销。"
                              : "把选中的 \(deleteTargets.count) 项移到废纸篓？"
+    }
+}
+
+private enum RemotePropertyState {
+    case idle
+    case loading
+    case loaded(RemoteItemProperties)
+    case failed(String)
+}
+
+private struct RemotePropertySheet: View {
+    let item: FileItem
+    let state: RemotePropertyState
+    let onClose: () -> Void
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .medium
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: item.isDirectory ? "folder.fill" : "doc")
+                    .font(.title2)
+                    .foregroundStyle(item.isDirectory ? Color.accentColor : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(item.isDirectory ? "远程文件夹" : "远程文件")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider()
+
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 9) {
+                propertyRow("位置", item.path)
+                propertyRow("类型", item.isDirectory ? "文件夹" : "文件")
+                propertyRow("修改时间", item.modified.map { Self.dateFormatter.string(from: $0) } ?? "未知")
+                sizeRows
+            }
+
+            if case .loading = state {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(item.isDirectory ? "正在递归计算文件夹大小…" : "正在读取属性…")
+                        .foregroundStyle(.secondary)
+                }
+            } else if case .failed(let message) = state {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("关闭") { onClose() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    @ViewBuilder
+    private var sizeRows: some View {
+        switch state {
+        case .idle, .loading:
+            propertyRow("大小", item.isDirectory ? "计算中…" : formatSize(item.size))
+        case .loaded(let properties):
+            propertyRow("大小", formatSize(properties.totalSize))
+            if item.isDirectory {
+                propertyRow("包含", "\(properties.fileCount) 个文件，\(properties.directoryCount) 个文件夹")
+            }
+        case .failed:
+            propertyRow("大小", item.isDirectory ? "计算失败" : formatSize(item.size))
+        }
+    }
+
+    private func propertyRow(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .truncationMode(.middle)
+        }
+    }
+}
+
+private struct RemoteQuickPropertyPanel: View {
+    let item: FileItem
+    let state: RemotePropertyState
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Image(systemName: item.isDirectory ? "folder.fill" : "doc")
+                    .font(.title3)
+                    .foregroundStyle(item.isDirectory ? Color.accentColor : .secondary)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(item.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 7) {
+                quickRow("类型", item.isDirectory ? "文件夹" : "文件")
+                quickRow("修改时间", item.modified.map { Self.dateFormatter.string(from: $0) } ?? "未知")
+                switch state {
+                case .idle, .loading:
+                    quickRow("大小", item.isDirectory ? "计算中…" : formatSize(item.size))
+                case .loaded(let properties):
+                    quickRow("大小", formatSize(properties.totalSize))
+                    if item.isDirectory {
+                        quickRow("包含", "\(properties.fileCount) 个文件，\(properties.directoryCount) 个文件夹")
+                    }
+                case .failed:
+                    quickRow("大小", item.isDirectory ? "计算失败" : formatSize(item.size))
+                }
+            }
+
+            if case .loading = state {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(item.isDirectory ? "正在递归计算…" : "正在读取…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if case .failed(let message) = state {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
+        }
+        .padding(14)
+        .frame(width: 330, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.8)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+    }
+
+    private func quickRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 54, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        }
     }
 }
