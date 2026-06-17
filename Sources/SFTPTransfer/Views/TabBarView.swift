@@ -40,7 +40,10 @@ final class TabScrollModel {
 ///
 /// 之所以自己写横向滚动而不用 SwiftUI `ScrollView`：需要鼠标滚轮纵向→横向的映射、两端
 /// 渐隐、以及切换 tab 时把活动项滚到中央——这些用系统 ScrollView 都不好做。
-struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: View>: View {
+///
+/// `Drag: Transferable` 泛型支持让调用方决定每个 tab 是否可拖、拖什么。返回 nil 表示
+/// 该 tab 不可拖。配合 `dropDestination` 可以实现跨列移动 tab。
+struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: View, Drag: Transferable>: View {
     let items: [Item]
     @Binding var selectedIndex: Int
     let title: (Item) -> Title
@@ -48,6 +51,8 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
     let addLabel: () -> AddLabel
     let onClose: (Int) -> Void
     var onSelect: ((Int) -> Void)? = nil
+    /// 返回非 nil 时该 tab 可被拖拽，nil 时不可拖。
+    var draggable: ((Item) -> Drag?)? = nil
 
     @State private var hovered: Int? = nil
     @State private var scroll = TabScrollModel()
@@ -100,7 +105,7 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
             ZStack(alignment: .leading) {
                 HStack(alignment: .bottom, spacing: 1) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        TabChip(
+                        let chip = TabChip(
                             title: title(item),
                             accessory: accessory(item),
                             isSelected: index == selectedIndex,
@@ -123,6 +128,11 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
                                 )
                             }
                         )
+                        if let payload = draggable?(item) {
+                            chip.draggable(payload)
+                        } else {
+                            chip
+                        }
                     }
                 }
                 .padding(.horizontal, 6)
@@ -347,6 +357,8 @@ struct ColumnTabBarView: View {
 
     var body: some View {
         let app = app
+        // 整个 tab 栏作为 drop 目标：跨列移动 tab 在此处理。
+        // 同列 no-op（app.moveTab 内已做检查）。
         TabBarView(
             items: column.tabs,
             selectedIndex: Binding(
@@ -397,8 +409,17 @@ struct ColumnTabBarView: View {
                 }
             },
             onClose: { index in closeTab(at: index) },
-            onSelect: { index in column.select(index) }
+            onSelect: { index in column.select(index) },
+            draggable: { tab in
+                TabTransferRef(sourceColumnID: column.id, tabID: tab.id)
+            }
         )
+        .dropDestination(for: TabTransferRef.self) { refs, _ in
+            guard let ref = refs.first else { return false }
+            // 来自其它列的 tab 移到本列
+            app.moveTab(fromSourceColumnID: ref.sourceColumnID, tabID: ref.tabID, to: column)
+            return true
+        }
     }
 
     private func tabIndex(_ tab: BrowserTab) -> Int {
@@ -415,9 +436,12 @@ struct ColumnTabBarView: View {
     }
 
     private func openOrFocusHost(_ host: HostEntry) {
-        // 在所有列中查找是否已存在该主机的远程 tab
-        let exists = !app.remoteTabs.filter { $0.host?.id == host.id }.isEmpty
-        if exists {
+        // 重复检测只看本列：左右两侧可以同时各有一个相同 host 的 tab。
+        let existsInThisColumn = column.tabs.contains { tab in
+            if case .remote(let rtab) = tab, rtab.host?.id == host.id { return true }
+            return false
+        }
+        if existsInThisColumn {
             duplicateHostPrompt = host
         } else {
             createAndConnect(host)

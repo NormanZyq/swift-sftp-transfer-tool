@@ -52,6 +52,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <key>UTTypeConformsTo</key><array><string>public.data</string></array>
             <key>UTTypeTagSpecification</key><dict/>
         </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>local.shyulatte.sftptransfer.tab-transfer</string>
+            <key>UTTypeDescription</key><string>SFTP tab transfer (cross-column move)</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key><dict/>
+        </dict>
     </array>
 </dict>
 </plist>

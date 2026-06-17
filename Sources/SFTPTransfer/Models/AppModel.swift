@@ -302,6 +302,35 @@ final class AppModel {
         }
     }
 
+    // MARK: 跨列 tab 移动
+
+    /// 把一个 tab 从源列移到目标列。
+    /// - 源列找不到对应 tab / 源列 = 目标列 → no-op。
+    /// - 远程 tab 的 SFTPSession 是 actor 引用，actor 本身不随列销毁，所以不需要重连。
+    /// - 移动到空列时把 moved tab 设为新活跃；其它情况沿用目标列原 selectedIndex。
+    func moveTab(fromSourceColumnID sourceID: UUID, tabID: UUID, to destColumn: PaneColumnModel) {
+        guard let source = column(for: sourceID), source.id != destColumn.id else { return }
+        guard let tab = source.take(tabID: tabID) else { return }
+        destColumn.tabs.append(tab)
+        // 让移过来的 tab 成为目标列的活跃项
+        if let newIdx = destColumn.tabs.firstIndex(where: { $0.id == tabID }) {
+            destColumn.selectedIndex = newIdx
+        }
+        // 同步顶栏 picker：目标列的活跃远程 tab 决定
+        if let active = activeRemoteTab {
+            selectedHostID = active.host?.id
+        } else {
+            selectedHostID = nil
+        }
+    }
+
+    /// 给定列 id 找到对应 PaneColumnModel。找不到返回 nil。
+    func column(for id: UUID) -> PaneColumnModel? {
+        if leftColumn.id == id { return leftColumn }
+        if rightColumn.id == id { return rightColumn }
+        return nil
+    }
+
     /// 选中右侧列中第 N 个远程 tab。
     func selectRemoteTab(at index: Int) {
         var n = 0
@@ -517,19 +546,55 @@ final class AppModel {
 
     // MARK: 通用「传输到另一侧」
 
-    /// 当前是否可发起"传输到另一侧"：两侧都有活跃 tab，源端有选中，远程目标端已连接。
-    var canTransfer: Bool {
-        guard let src = sourceTabForTransfer, !src.pane.selection.isEmpty else { return false }
-        if let dest = destinationTabForTransfer, dest.isRemote, !isActiveRemoteTabConnected {
+    // MARK: 通用「传输到另一侧」
+
+    /// "传输到右侧"按钮可用性：左侧活跃 tab 有选中项 & 右侧活跃 tab 可接收。
+    var canTransferToRight: Bool {
+        canTransfer(from: leftColumn, to: rightColumn)
+    }
+
+    /// "传输到左侧"按钮可用性：右侧活跃 tab 有选中项 & 左侧活跃 tab 可接收。
+    var canTransferToLeft: Bool {
+        canTransfer(from: rightColumn, to: leftColumn)
+    }
+
+    /// 通用方向判断：源列有选中项 & 目标列的活跃面板可接收（远程已连接 / 本地始终 OK）。
+    private func canTransfer(from src: PaneColumnModel, to dest: PaneColumnModel) -> Bool {
+        guard let srcTab = src.activeTab, !srcTab.pane.selection.isEmpty else { return false }
+        guard let destTab = dest.activeTab else { return false }
+        if destTab.isRemote, destTab.owningRemoteTab?.isConnected != true {
             return false
         }
         return true
     }
 
-    /// 当前"传输到另一侧"操作是否为 远程 → 远程（需要本机中转）。
-    var isRemoteToRemoteTransfer: Bool {
-        guard let src = sourceTabForTransfer, let dest = destinationTabForTransfer else { return false }
-        return src.isRemote && dest.isRemote
+    /// "传输到右侧"是否为 远程 → 远程（需要本机中转）。仅在按钮可点击时才有意义。
+    var isTransferToRightRemoteRelay: Bool {
+        isRelay(from: leftColumn, to: rightColumn)
+    }
+
+    /// "传输到左侧"是否为 远程 → 远程（需要本机中转）。
+    var isTransferToLeftRemoteRelay: Bool {
+        isRelay(from: rightColumn, to: leftColumn)
+    }
+
+    private func isRelay(from src: PaneColumnModel, to dest: PaneColumnModel) -> Bool {
+        guard let srcTab = src.activeTab, let destTab = dest.activeTab else { return false }
+        return srcTab.isRemote && destTab.isRemote
+    }
+
+    /// "传输到右侧"按钮的源/目标端点对应文字。
+    var transferToRightTitle: String {
+        titleForTransfer(from: leftColumn, to: rightColumn)
+    }
+    /// "传输到左侧"按钮的源/目标端点对应文字。
+    var transferToLeftTitle: String {
+        titleForTransfer(from: rightColumn, to: leftColumn)
+    }
+
+    private func titleForTransfer(from src: PaneColumnModel, to dest: PaneColumnModel) -> String {
+        guard let srcTab = src.activeTab, let destTab = dest.activeTab else { return "传输" }
+        return Self.titleForTransfer(source: srcTab, destination: destTab)
     }
 
     /// 把当前两侧活跃 tab 的传输意图快照化：用于"远程中转确认"对话框中暂存请求。
@@ -542,13 +607,12 @@ final class AppModel {
         let involvedRemoteTabIDs: Set<RemoteTab.ID>
     }
 
-    /// 在用户点击"传输到另一侧"时构造快照（不发起传输）。
-    /// 远程端点必须已连接；本调用假定 `canTransfer == true`。
+    /// 把 from → to 方向的传输构造成快照。
     @discardableResult
-    func makeTransferSnapshot() -> TransferSnapshot? {
-        guard let srcTab = sourceTabForTransfer,
-              let destTab = destinationTabForTransfer,
-              !engine.isRunning else { return nil }
+    func makeTransferSnapshot(from: PaneColumnModel, to: PaneColumnModel) -> TransferSnapshot? {
+        guard !engine.isRunning,
+              let srcTab = from.activeTab,
+              let destTab = to.activeTab else { return nil }
         let srcItems = srcTab.pane.selectedItems
         guard !srcItems.isEmpty else { return nil }
         let destDir = destTab.pane.currentPath
@@ -590,79 +654,43 @@ final class AppModel {
         }
     }
 
-    /// 传输按钮的文案：按源端 / 目标端组合给出。
-    var transferButtonTitle: String {
-        guard let src = sourceTabForTransfer, let dest = destinationTabForTransfer else { return "传输" }
-        return Self.titleForTransfer(source: src, destination: dest)
-    }
-
-    /// 传输按钮的图标：按源端 / 目标端组合给出。
-    var transferButtonIcon: String {
-        guard let src = sourceTabForTransfer, let dest = destinationTabForTransfer else { return "arrow.right.arrow.left" }
-        return Self.iconForTransfer(source: src, destination: dest)
-    }
-
-    /// 源端 = 左侧活跃 tab。
-    private var sourceTabForTransfer: BrowserTab? { leftColumn.activeTab }
-    /// 目标端 = 右侧活跃 tab。
-    private var destinationTabForTransfer: BrowserTab? { rightColumn.activeTab }
-
-    /// 把活跃源端 tab 的选中项按通用模型转到目标端 tab 的当前目录。
-    func transferToOtherSide() {
-        guard let srcTab = sourceTabForTransfer,
-              let destTab = destinationTabForTransfer,
-              canTransfer,
-              !engine.isRunning else { return }
-
-        let srcItems = srcTab.pane.selectedItems
-        guard !srcItems.isEmpty else { return }
-        let destDir = destTab.pane.currentPath
-        let srcEndpoint = srcTab.kindEndpoint
-        let destEndpoint = destTab.kindEndpoint
-
-        let requests: [TransferRequest] = srcItems.map { item in
-            TransferRequest(
-                source: TransferItem(endpoint: srcEndpoint, path: item.path, name: item.name, isDirectory: item.isDirectory),
-                destination: destEndpoint,
-                destinationDirectory: destDir
-            )
-        }
-        let actionLabel = Self.titleForTransfer(source: srcTab, destination: destTab)
-        let involvedRemoteTabIDs = collectRemoteTabIDs(in: [srcTab, destTab])
-
-        transferTask = Task { [weak self, engine] in
-            guard let self else { return }
-            let result = await engine.run(requests) { [weak self] tabID in
-                self?.sessionResolver(for: tabID)
-            }
-            if result.connectionLost {
-                for tabID in involvedRemoteTabIDs {
-                    if let tab = self.allRemoteTabsList.first(where: { $0.id == tabID }) {
-                        self.markConnectionLost(tab, action: actionLabel)
-                    }
-                }
-            }
-            await srcTab.pane.reload()
-            await destTab.pane.reload()
-        }
-    }
-
-    // MARK: 传输 - 旧入口（保留为 API；新代码用 transferToOtherSide）
+    // MARK: 传输 - 旧入口（保留为 API；新代码用 transferToLeft/transferToRight）
 
     /// 上传：本地活跃 tab 的选中 → 远程活跃 tab 的当前目录。
-    /// 等价于 `transferToOtherSide`，但要求源是 .local、目标 .remote。
+    /// 等价于 `transferToRight()`，但要求源是 .local、目标 .remote。
     func uploadSelection() {
-        guard sourceTabForTransfer?.isLocal == true,
-              destinationTabForTransfer?.isRemote == true else { return }
-        transferToOtherSide()
+        guard leftColumn.activeTab?.isLocal == true,
+              rightColumn.activeTab?.isRemote == true else { return }
+        transferToRight()
     }
 
     /// 下载：远程活跃 tab 的选中 → 本地活跃 tab 的当前目录。
-    /// 等价于 `transferToOtherSide`，但要求源是 .remote、目标 .local。
+    /// 等价于 `transferToLeft()`，但要求源是 .remote、目标 .local。
     func downloadSelection() {
-        guard sourceTabForTransfer?.isRemote == true,
-              destinationTabForTransfer?.isLocal == true else { return }
-        transferToOtherSide()
+        guard rightColumn.activeTab?.isRemote == true,
+              leftColumn.activeTab?.isLocal == true else { return }
+        transferToLeft()
+    }
+
+    // MARK: 方向化传输
+
+    /// "传输到右侧"：把左侧活跃 tab 的选中 → 右侧活跃 tab 的当前目录。
+    /// 视图层应先调用 `canTransferToRight` 检查；远程 → 远程 时需要先经"远程中转确认"对话框
+    /// （`makeTransferSnapshot` + `performTransferFromSnapshot`）。
+    func transferToRight() {
+        performOrSnapshot(from: leftColumn, to: rightColumn)
+    }
+
+    /// "传输到左侧"：把右侧活跃 tab 的选中 → 左侧活跃 tab 的当前目录。
+    func transferToLeft() {
+        performOrSnapshot(from: rightColumn, to: leftColumn)
+    }
+
+    /// 如果远程中转未确认 → 视图层应当先弹确认对话框（参见 ContentView.handleTransferClick）。
+    /// 这里假定"已确认"或"非中转"时直接执行。
+    private func performOrSnapshot(from src: PaneColumnModel, to dest: PaneColumnModel) {
+        guard !engine.isRunning, let snapshot = makeTransferSnapshot(from: src, to: dest) else { return }
+        performTransferFromSnapshot(snapshot)
     }
 
     // MARK: 辅助

@@ -165,14 +165,21 @@ struct ContentView: View {
     private var transferButtons: some View {
         HStack {
             Spacer()
-            // 通用"传输到另一侧"：从当前活跃 tab 出发，到另一侧活跃 tab。
-            // 文案根据源端 / 目标端动态调整（上传 / 下载 / 复制 / 远程中转）。
+            // "传输到左侧 ←"：把右侧活跃 tab 的选中项传到左侧活跃 tab 的当前目录。
             Button {
-                handleTransferClick()
+                handleTransferClick(direction: .toLeft)
             } label: {
-                Label(app.transferButtonTitle, systemImage: app.transferButtonIcon)
+                Label(app.transferToLeftTitle, systemImage: "arrow.left")
             }
-            .disabled(!app.canTransfer || app.engine.isRunning)
+            .disabled(!app.canTransferToLeft || app.engine.isRunning)
+
+            // "传输到右侧 →"：把左侧活跃 tab 的选中项传到右侧活跃 tab 的当前目录。
+            Button {
+                handleTransferClick(direction: .toRight)
+            } label: {
+                Label(app.transferToRightTitle, systemImage: "arrow.right")
+            }
+            .disabled(!app.canTransferToRight || app.engine.isRunning)
 
             Button(role: .cancel) {
                 app.cancelTransfer()
@@ -202,15 +209,32 @@ struct ContentView: View {
         }
     }
 
+    private enum TransferDirection { case toLeft, toRight }
+
     /// 处理传输按钮点击：远程中转 + 未确认过 → 弹确认；其余直接执行。
-    private func handleTransferClick() {
-        if app.isRemoteToRemoteTransfer, !relayAcknowledged {
-            // 先构造请求并暂存，等用户确认后执行
-            if let snapshot = app.makeTransferSnapshot() {
+    private func handleTransferClick(direction: TransferDirection) {
+        let isRelay: Bool
+        let from: PaneColumnModel
+        let to: PaneColumnModel
+        switch direction {
+        case .toLeft:
+            isRelay = app.isTransferToLeftRemoteRelay
+            from = app.rightColumn
+            to = app.leftColumn
+        case .toRight:
+            isRelay = app.isTransferToRightRemoteRelay
+            from = app.leftColumn
+            to = app.rightColumn
+        }
+        if isRelay, !relayAcknowledged {
+            if let snapshot = app.makeTransferSnapshot(from: from, to: to) {
                 pendingRelay = snapshot
             }
         } else {
-            app.transferToOtherSide()
+            switch direction {
+            case .toLeft: app.transferToLeft()
+            case .toRight: app.transferToRight()
+            }
         }
     }
 

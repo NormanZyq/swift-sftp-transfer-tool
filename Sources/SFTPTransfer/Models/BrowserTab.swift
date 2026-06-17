@@ -64,4 +64,10 @@ enum BrowserTab: @MainActor Identifiable {
         case .remote(let tab): return .remote(tabID: tab.id, hostID: tab.host?.id)
         }
     }
+
+    /// 远程 tab 才有意义：穿透到 `RemoteTab` 实例。
+    var owningRemoteTab: RemoteTab? {
+        if case .remote(let tab) = self { return tab }
+        return nil
+    }
 }

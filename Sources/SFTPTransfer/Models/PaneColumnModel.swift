@@ -46,6 +46,23 @@ final class PaneColumnModel: Identifiable {
         }
     }
 
+    /// 仅"取出"一个 tab，不做任何断开 / 清理。用于跨列移动。
+    /// 远程 tab 的 SFTPSession 是 actor 引用，移列后 actor 继续存活，无需重连。
+    func take(at index: Int) -> BrowserTab? {
+        guard tabs.indices.contains(index) else { return nil }
+        let tab = tabs.remove(at: index)
+        if selectedIndex >= tabs.count {
+            selectedIndex = max(0, tabs.count - 1)
+        }
+        return tab
+    }
+
+    /// 按 tab id 查找并取出（不断开）。找不到返回 nil。
+    func take(tabID: UUID) -> BrowserTab? {
+        guard let idx = tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
+        return take(at: idx)
+    }
+
     func select(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
         selectedIndex = index
