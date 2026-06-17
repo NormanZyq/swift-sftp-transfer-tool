@@ -439,10 +439,8 @@ struct ColumnTabBarView: View {
     private func closeTab(at index: Int) {
         // 通过 column 自己的 close 方法（其内部会处理 remote tab 的断开）。
         column.close(at: index, minCount: 1)
-        // 顶栏 picker 同步（针对远程 tab）
-        if let active = app.activeRemoteTab {
-            app.selectedHostID = active.host?.id
-        }
+        // 顶栏 picker 跟随当前列剩余的活跃会话。
+        app.setFocus(to: column)
     }
 
     private func openOrFocusHost(_ host: HostEntry) {

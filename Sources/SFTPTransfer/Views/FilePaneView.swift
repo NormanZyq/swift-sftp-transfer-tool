@@ -248,7 +248,7 @@ struct FilePaneView: View {
 
     /// 把当前面板的 FileItem 包装成对应的 TransferItemRef。
     private func draggableRef(for item: FileItem) -> TransferItemRef {
-        if pane.isRemote, let tab = app.activeRemoteTab {
+        if pane.isRemote, let tab = app.remoteTab(forPane: pane) {
             return .remote(tabID: tab.id, path: item.path, name: item.name, isDirectory: item.isDirectory)
         }
         return .local(path: item.path, name: item.name, isDirectory: item.isDirectory)
@@ -267,14 +267,14 @@ struct FilePaneView: View {
     private func menu(for ids: Set<FileItem.ID>) -> some View {
         let targets = pane.displayedItems.filter { ids.contains($0.id) }
         if pane.isRemote {
-            Button("下载") { pane.selection = ids; app.downloadSelection() }
-                .disabled(targets.isEmpty)
+            Button("下载") { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
+                .disabled(targets.isEmpty || !app.canUploadDownloadFromPaneToOpposite(pane))
             if targets.count == 1, let only = targets.first {
                 Button("查看属性…") { showRemoteProperties(for: only) }
             }
         } else {
-            Button("上传") { pane.selection = ids; app.uploadSelection() }
-                .disabled(targets.isEmpty || !app.isActiveRemoteTabConnected)
+            Button("上传") { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
+                .disabled(targets.isEmpty || !app.canUploadDownloadFromPaneToOpposite(pane))
         }
         if !pane.isRemote, !targets.isEmpty {
             Button("在访达中打开") { LocalFileSystem.revealInFinder(targets.map(\.path)) }

@@ -398,6 +398,41 @@ final class AppModel {
         return nil
     }
 
+    /// 给定远程 PaneModel 找它所属的 RemoteTab。统一左右列后，不能再假定远程只在右侧。
+    func remoteTab(forPane pane: PaneModel) -> RemoteTab? {
+        allRemoteTabsList.first { $0.pane === pane }
+    }
+
+    /// 给定面板找它的对侧活跃 tab。
+    func oppositeActiveTab(forPane pane: PaneModel) -> BrowserTab? {
+        if let column = column(forPane: pane) {
+            return column.id == leftColumn.id ? rightColumn.activeTab : leftColumn.activeTab
+        }
+        return nil
+    }
+
+    func canTransferFromPaneToOpposite(_ pane: PaneModel) -> Bool {
+        guard let source = column(forPane: pane) else { return false }
+        let destination = source.id == leftColumn.id ? rightColumn : leftColumn
+        return canTransfer(from: source, to: destination)
+    }
+
+    func canUploadDownloadFromPaneToOpposite(_ pane: PaneModel) -> Bool {
+        guard let source = column(forPane: pane),
+              let sourceTab = source.activeTab,
+              sourceTab.pane === pane else { return false }
+        let destination = source.id == leftColumn.id ? rightColumn : leftColumn
+        guard let destTab = destination.activeTab else { return false }
+        guard sourceTab.isRemote != destTab.isRemote else { return false }
+        return canTransfer(from: source, to: destination)
+    }
+
+    func transferFromPaneToOpposite(_ pane: PaneModel) {
+        guard let source = column(forPane: pane) else { return }
+        let destination = source.id == leftColumn.id ? rightColumn : leftColumn
+        performOrSnapshot(from: source, to: destination)
+    }
+
     /// 选中右侧列中第 N 个远程 tab。
     func selectRemoteTab(at index: Int) {
         var n = 0
@@ -611,7 +646,7 @@ final class AppModel {
                                       action: String,
                                       showAlert: Bool = true) -> Bool {
         if SFTPSession.isConnectionLost(error),
-           let tab = remoteTabs.first(where: { $0.pane === pane }) {
+           let tab = remoteTab(forPane: pane) {
             markConnectionLost(tab, action: action, showAlert: showAlert)
             return true
         }
@@ -904,13 +939,16 @@ final class AppModel {
         guard !engine.isRunning, !refs.isEmpty else { return }
         let destDir = destinationPane.currentPath
         let destEndpoint: TransferEndpoint
+        let targetTab: RemoteTab?
         switch destinationPane.kind {
         case .local:
             destEndpoint = .local
+            targetTab = nil
         case .remote:
-            // 只有活跃远程 tab 可作为目标：未连接时不接受。
-            guard isActiveRemoteTabConnected, let tab = activeRemoteTab else { return }
+            // 只允许投到该面板实际所属的已连接远程 tab。
+            guard let tab = remoteTab(forPane: destinationPane), tab.isConnected else { return }
             destEndpoint = .remote(tabID: tab.id, hostID: tab.host?.id)
+            targetTab = tab
         }
 
         var requests: [TransferRequest] = []
@@ -924,7 +962,7 @@ final class AppModel {
                 continue
             }
             // 校验远程目标端：必须已连接
-            if case .remote = destEndpoint, !isActiveRemoteTabConnected { return }
+            if case .remote = destEndpoint, targetTab?.isConnected != true { return }
             requests.append(TransferRequest(
                 source: TransferItem(endpoint: srcEndpoint, path: ref.path, name: ref.name, isDirectory: ref.isDirectory),
                 destination: destEndpoint,
@@ -937,7 +975,6 @@ final class AppModel {
             if case .remote(let tabID, _, _, _) = ref { return tabID }
             return nil
         })
-        let targetTab = activeRemoteTab // 仅用于断线时打点
         let actionLabel = describeTransferAction(refs: refs, dest: destEndpoint)
         transferTask = Task { [weak self, engine] in
             guard let self else { return }
@@ -949,7 +986,7 @@ final class AppModel {
             }
             // 刷新源端面板：远程 ref 所属 tab 的 pane
             for tabID in involvedRemoteTabIDs {
-                if let t = self.remoteTabs.first(where: { $0.id == tabID }) {
+                if let t = self.allRemoteTabsList.first(where: { $0.id == tabID }) {
                     await t.pane.reload()
                 }
             }
