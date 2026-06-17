@@ -47,8 +47,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
-            <key>UTTypeIdentifier</key><string>local.shyulatte.sftptransfer.remote-item</string>
-            <key>UTTypeDescription</key><string>SFTP remote item reference</string>
+            <key>UTTypeIdentifier</key><string>local.shyulatte.sftptransfer.transfer-item</string>
+            <key>UTTypeDescription</key><string>SFTP transfer item reference (local or remote)</string>
             <key>UTTypeConformsTo</key><array><string>public.data</string></array>
             <key>UTTypeTagSpecification</key><dict/>
         </dict>

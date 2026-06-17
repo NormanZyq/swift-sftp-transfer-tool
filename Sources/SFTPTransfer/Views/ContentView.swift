@@ -4,9 +4,13 @@ struct ContentView: View {
     @Environment(AppModel.self) private var app
     /// 底部「传输状态」栏是否由用户展开（记忆到偏好设置）。
     @AppStorage("transfer.statusExpanded") private var statusExpanded = true
+    /// 用户是否已确认"远程中转会经本机临时文件"。
+    @AppStorage("transfer.relayAcknowledged") private var relayAcknowledged = false
     /// 结果提醒 toast（自动淡出）。
     @State private var toast: TransferEngine.Outcome?
     @State private var toastDismiss: Task<Void, Never>?
+    /// 待处理的传输请求（远程中转未确认时暂存）。
+    @State private var pendingRelay: AppModel.TransferSnapshot?
     /// 折叠明细的自然高度（测量得到），折叠动画在 0 ↔ 该高度之间插值。
     @State private var detailHeight: CGFloat = 0
 
@@ -19,13 +23,13 @@ struct ContentView: View {
             topBar
             HSplitView {
                 paneSide(
-                    tabBar: LocalTabBarView(),
-                    pane: app.activeLocalPane
+                    tabBar: ColumnTabBarView(column: app.leftColumn),
+                    pane: app.leftColumn.activePane
                 )
                 .frame(minWidth: 360)
                 paneSide(
-                    tabBar: RemoteTabBarView(),
-                    pane: app.activeRemoteTab?.pane
+                    tabBar: ColumnTabBarView(column: app.rightColumn),
+                    pane: app.rightColumn.activePane
                 )
                 .frame(minWidth: 360)
             }
@@ -161,23 +165,14 @@ struct ContentView: View {
     private var transferButtons: some View {
         HStack {
             Spacer()
+            // 通用"传输到另一侧"：从当前活跃 tab 出发，到另一侧活跃 tab。
+            // 文案根据源端 / 目标端动态调整（上传 / 下载 / 复制 / 远程中转）。
             Button {
-                app.uploadSelection()
+                handleTransferClick()
             } label: {
-                Label("上传选中", systemImage: "arrow.right")
+                Label(app.transferButtonTitle, systemImage: app.transferButtonIcon)
             }
-            .disabled(!app.isActiveRemoteTabConnected
-                      || app.engine.isRunning
-                      || (app.activeLocalPane?.selection.isEmpty ?? true))
-
-            Button {
-                app.downloadSelection()
-            } label: {
-                Label("下载选中", systemImage: "arrow.left")
-            }
-            .disabled(!app.isActiveRemoteTabConnected
-                      || app.engine.isRunning
-                      || (app.activeRemoteTab?.pane.selection.isEmpty ?? true))
+            .disabled(!app.canTransfer || app.engine.isRunning)
 
             Button(role: .cancel) {
                 app.cancelTransfer()
@@ -186,6 +181,36 @@ struct ContentView: View {
             }
             .disabled(!app.engine.isRunning)
             Spacer()
+        }
+        .confirmationDialog(
+            "远程中转提示",
+            isPresented: Binding(
+                get: { pendingRelay != nil },
+                set: { if !$0 { pendingRelay = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("继续") {
+                relayAcknowledged = true
+                let snapshot = pendingRelay
+                pendingRelay = nil
+                if let snapshot { app.performTransferFromSnapshot(snapshot) }
+            }
+            Button("取消", role: .cancel) { pendingRelay = nil }
+        } message: {
+            Text("本次传输会在两台远程服务器之间通过本机中转，会在硬盘上产生临时文件。\n\n确认后下次传输将不再询问。")
+        }
+    }
+
+    /// 处理传输按钮点击：远程中转 + 未确认过 → 弹确认；其余直接执行。
+    private func handleTransferClick() {
+        if app.isRemoteToRemoteTransfer, !relayAcknowledged {
+            // 先构造请求并暂存，等用户确认后执行
+            if let snapshot = app.makeTransferSnapshot() {
+                pendingRelay = snapshot
+            }
+        } else {
+            app.transferToOtherSide()
         }
     }
 
@@ -248,6 +273,18 @@ struct ContentView: View {
                 }
             }
             ProgressView(value: progressFraction)
+            HStack(spacing: 12) {
+                if app.engine.isRunning, app.engine.bytesPerSecond > 0 {
+                    Text("\(formatSpeed(app.engine.bytesPerSecond))")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer()
+                if app.engine.isRunning, app.engine.etaSeconds > 0 {
+                    Text("剩余 \(formatEta(app.engine.etaSeconds))")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            .font(.caption)
             logView
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,6 +294,27 @@ struct ContentView: View {
         let total = app.engine.currentTotal
         guard total > 0 else { return 0 }
         return min(1, Double(app.engine.currentBytes) / Double(total))
+    }
+
+    private func formatSpeed(_ bps: Double) -> String {
+        let units = ["B/s", "KB/s", "MB/s", "GB/s"]
+        var value = bps
+        var i = 0
+        while value >= 1024, i < units.count - 1 {
+            value /= 1024
+            i += 1
+        }
+        return String(format: i == 0 ? "%.0f %@" : "%.1f %@", value, units[i])
+    }
+
+    private func formatEta(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds) 秒" }
+        let m = seconds / 60
+        let s = seconds % 60
+        if m < 60 { return "\(m) 分 \(s) 秒" }
+        let h = m / 60
+        let mm = m % 60
+        return "\(h) 小时 \(mm) 分"
     }
 
     private var logView: some View {

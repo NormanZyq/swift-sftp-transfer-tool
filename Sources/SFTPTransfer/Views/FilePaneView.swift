@@ -226,16 +226,10 @@ struct FilePaneView: View {
             .width(min: 110, ideal: 150)
         } rows: {
             // 行级 .draggable：点到文字也能正常选中（单元格级 draggable 会拦截点击），并支持多选拖拽。
-            if pane.isRemote {
-                ForEach(pane.displayedItems) { item in
-                    TableRow(item)
-                        .draggable(RemoteItemRef(path: item.path, name: item.name, isDirectory: item.isDirectory))
-                }
-            } else {
-                ForEach(pane.displayedItems) { item in
-                    TableRow(item)
-                        .draggable(URL(fileURLWithPath: item.path))
-                }
+            // 统一使用 TransferItemRef：本地条目 → .local；远程条目 → .remote(tabID:)。
+            ForEach(pane.displayedItems) { item in
+                TableRow(item)
+                    .draggable(draggableRef(for: item))
             }
         }
         .contextMenu(forSelectionType: FileItem.ID.self) { ids in
@@ -247,22 +241,20 @@ struct FilePaneView: View {
         }
     }
 
+    /// 把当前面板的 FileItem 包装成对应的 TransferItemRef。
+    private func draggableRef(for item: FileItem) -> TransferItemRef {
+        if pane.isRemote, let tab = app.activeRemoteTab {
+            return .remote(tabID: tab.id, path: item.path, name: item.name, isDirectory: item.isDirectory)
+        }
+        return .local(path: item.path, name: item.name, isDirectory: item.isDirectory)
+    }
+
     @ViewBuilder
     private var table: some View {
-        if pane.isRemote {
-            // 远程面板：接收来自本地 / 访达的 URL → 上传。
-            tableCore.dropDestination(for: URL.self) { urls, _ in
-                guard app.isActiveRemoteTabConnected else { return false }
-                app.dropLocalPaths(urls.map(\.path), toRemoteDir: pane.currentPath)
-                return true
-            }
-        } else {
-            // 本地面板：接收来自远程面板的条目 → 下载。
-            tableCore.dropDestination(for: RemoteItemRef.self) { refs, _ in
-                guard app.isActiveRemoteTabConnected else { return false }
-                app.dropRemoteItems(refs, toLocalDir: pane.currentPath)
-                return true
-            }
+        // 任何面板都接收统一 TransferItemRef；目标端点 = 当前面板的 endpoint。
+        tableCore.dropDestination(for: TransferItemRef.self) { refs, _ in
+            app.dropTransferItems(refs, into: pane)
+            return true
         }
     }
 
