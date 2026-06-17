@@ -28,7 +28,7 @@ Single-window SwiftUI app. `SFTPTransferApp` creates one `AppModel` and injects 
 ### Concurrency model (the central design)
 
 - **`SFTPSession` is an `actor`** (`Models/SFTPSession.swift`) that owns the one SSH client + one SFTP channel and serializes every operation against it. This is the load-bearing decision — it replaces the Python version's manual "one thread on the channel at a time" rule. All remote I/O (list, CRUD, upload, download, recursive walk, search) goes through it.
-- **Everything UI-facing is `@MainActor`** (`AppModel`, `TransferEngine`, `PaneModel`). Values crossing the actor boundary are `Sendable` (`FileItem`, `HostEntry`, `RemoteItemRef`).
+- **Everything UI-facing is `@MainActor`** (`AppModel`, `TransferEngine`, `PaneModel`). Values crossing the actor boundary are `Sendable` (`FileItem`, `HostEntry`, `TransferItemRef`, `TabTransferRef`).
 - Progress callbacks fired from inside the actor hop back to the UI with `Task { @MainActor in ... }`.
 
 A change touching remote behavior typically means: add an actor-isolated method on `SFTPSession`, call it from a `@MainActor` model via `await`, and pass only `Sendable` values across.
@@ -61,9 +61,9 @@ When changing connection logic, preserve this "validator records the verdict, Ap
 
 ### Drag & drop
 
-- Local/Finder → remote pane = **upload**: local rows are `.draggable(URL)`; the remote pane has `.dropDestination(for: URL.self)`.
-- Remote → local pane = **download**: remote rows are `.draggable(RemoteItemRef)` (a custom `Transferable`, since remote paths aren't real file URLs); the local pane has `.dropDestination(for: RemoteItemRef.self)`.
-- `RemoteItemRef` uses a private UTType `local.shyulatte.sftptransfer.remote-item`, declared in **two places that must stay in sync**: `Models/RemoteItemRef.swift` and the `UTExportedTypeDeclarations` in `make-app.sh`'s Info.plist.
+- File rows use `.draggable(TransferItemRef)`: local rows carry `.local`, remote rows carry `.remote(tabID:)` because remote paths aren't real file URLs. Every pane accepts `.dropDestination(for: TransferItemRef.self)` and resolves the actual source/target endpoint from the payload and destination pane.
+- Tabs use `.draggable(TabTransferRef)` for cross-column moves.
+- Private UTTypes are declared in **two places that must stay in sync**: `Models/TransferItemRef.swift` / `Models/TabTransferRef.swift` and the `UTExportedTypeDeclarations` in `make-app.sh`'s Info.plist.
 
 ## Conventions & gotchas
 
