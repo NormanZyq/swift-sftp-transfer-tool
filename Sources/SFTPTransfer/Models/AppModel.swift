@@ -44,6 +44,8 @@ final class AppModel {
         // 初始：左侧 1 个本地 tab，定位到主目录；右侧 1 个空远程 tab（用户随后从 picker 选主机）
         addLocalTab(initialPath: LocalFileSystem.home)
         addRemoteTab()
+        // 默认焦点 = 右列（顶栏 picker / 连接按钮初始看向右列的远程 tab）
+        focusedColumnID = rightColumn.id
         if let firstHost = hosts.first {
             assignHostToActiveRemoteTab(firstHost)
         }
@@ -184,6 +186,44 @@ final class AppModel {
         rightColumn.activeRemoteTab
     }
 
+    // MARK: 焦点列
+
+    /// 当前 UI 焦点所在的列。Tab 切换、面板点击、+ 按钮等都会更新这个值。
+    /// 顶栏 host picker / 连接按钮据此动态切换。
+    /// 初始默认指向右列（保持传统双栏布局的默认焦点）。
+    private(set) var focusedColumnID: UUID = UUID()
+
+    /// 焦点列实例。`focusedColumnID` 必须与 `leftColumn.id` 或 `rightColumn.id` 之一相等；
+    /// 若启动时占位 UUID 不匹配任一列，回退到右列。
+    var focusedColumn: PaneColumnModel {
+        if leftColumn.id == focusedColumnID { return leftColumn }
+        if rightColumn.id == focusedColumnID { return rightColumn }
+        return rightColumn
+    }
+
+    /// 焦点列活跃的远程 tab。顶栏 host picker / 连接按钮都看这个。
+    var focusedActiveRemoteTab: RemoteTab? { focusedColumn.activeRemoteTab }
+
+    /// 焦点列的活跃远程 tab 是否已连接。
+    var isFocusedRemoteTabConnected: Bool {
+        focusedActiveRemoteTab?.isConnected == true
+    }
+
+    /// 焦点列是否可发起连接：活跃远程 tab 存在、有 host、未在连接中。
+    var canConnectFocused: Bool {
+        guard let tab = focusedActiveRemoteTab, tab.host != nil else { return false }
+        return tab.state == .disconnected
+    }
+
+    /// 视图层调用：把焦点切到某列。Tab 选中、面板点击、+ 按钮等都通过这里改焦点。
+    func setFocus(to column: PaneColumnModel) {
+        focusedColumnID = column.id
+        // 同步顶栏 picker：让 picker 反映新焦点列活跃远程 tab 的 host
+        if let active = focusedActiveRemoteTab {
+            selectedHostID = active.host?.id
+        }
+    }
+
     /// 当前活跃远程 tab 是否已连接。多 tab 模式下，远程面板的可用性、传输的"目标 session"
     /// 等都看这个标志。
     var isActiveRemoteTabConnected: Bool {
@@ -202,13 +242,13 @@ final class AppModel {
         return tab.state == .disconnected
     }
 
-    /// 顶栏 host picker 只替换当前远程 tab 的主机，不跨 tab 查找或切换。
-    /// 若当前 tab 已有连接，则先断开旧会话，再自动连接到新选中的主机。
+    /// 顶栏 host picker 只替换焦点列活跃远程 tab 的主机，不跨列 / 跨 tab 查找或切换。
+    /// 若该 tab 已有连接，则先断开旧会话，再自动连接到新选中的主机。
     func selectHost(_ id: HostEntry.ID?) {
         selectedHostID = id
         guard let id,
               let host = hosts.first(where: { $0.id == id }),
-              let tab = activeRemoteTab,
+              let tab = focusedActiveRemoteTab,
               tab.host?.id != host.id else { return }
 
         if tab.state == .disconnected {
@@ -331,6 +371,13 @@ final class AppModel {
         return nil
     }
 
+    /// 给定 PaneModel 找它所属的列（按引用相等比较）。找不到返回 nil。
+    func column(forPane pane: PaneModel) -> PaneColumnModel? {
+        for tab in leftColumn.tabs where tab.pane === pane { return leftColumn }
+        for tab in rightColumn.tabs where tab.pane === pane { return rightColumn }
+        return nil
+    }
+
     /// 选中右侧列中第 N 个远程 tab。
     func selectRemoteTab(at index: Int) {
         var n = 0
@@ -385,9 +432,15 @@ final class AppModel {
 
     // MARK: 连接 / 断开
 
-    /// 连接当前活跃远程 tab。`passphrase` 用于带口令私钥的二次输入。
+    /// 连接焦点列的活跃远程 tab。`passphrase` 用于带口令私钥的二次输入。
+    /// 旧 `connect(passphrase:)` 内部仍然走这个；保留旧入口以兼容老代码 / 菜单快捷键。
     func connect(passphrase: String? = nil) {
-        guard let tab = activeRemoteTab, let host = tab.host, tab.state == .disconnected else { return }
+        connectFocused(passphrase: passphrase)
+    }
+
+    /// 连接焦点列的活跃远程 tab。顶栏"连接"按钮 / 菜单命令都走这里。
+    func connectFocused(passphrase: String? = nil) {
+        guard let tab = focusedActiveRemoteTab, let host = tab.host, tab.state == .disconnected else { return }
         tab.state = .connecting
         tab.statusText = "连接中 \(host.alias)…"
 
@@ -404,7 +457,7 @@ final class AppModel {
     }
 
     func confirmUnknownHost() {
-        guard let prompt = hostKeyPrompt, let tab = activeRemoteTab, tab.host != nil else { return }
+        guard let prompt = hostKeyPrompt, let tab = focusedActiveRemoteTab, tab.host != nil else { return }
         hostKeyPrompt = nil
         KnownHosts.append(host: prompt.info.host, port: prompt.info.port, openSSHLine: prompt.info.openSSHLine)
         engine.appendLog("已将 \(prompt.info.host) 写入 known_hosts")
@@ -413,8 +466,8 @@ final class AppModel {
 
     func cancelUnknownHost() {
         hostKeyPrompt = nil
-        activeRemoteTab?.state = .disconnected
-        activeRemoteTab?.statusText = "未连接"
+        focusedActiveRemoteTab?.state = .disconnected
+        focusedActiveRemoteTab?.statusText = "未连接"
     }
 
     /// 真正跑 connect 的私有方法：被 `connect` 触发，因 pass prompt / 未知主机可能要重入。
@@ -497,9 +550,12 @@ final class AppModel {
         pane.searchResults = nil
     }
 
-    /// 断开当前活跃远程 tab。
-    func disconnect() {
-        guard let tab = activeRemoteTab else { return }
+    /// 断开当前活跃远程 tab。旧入口；保留以兼容旧调用点。新代码请用 `disconnectFocused()`。
+    func disconnect() { disconnectFocused() }
+
+    /// 断开焦点列的活跃远程 tab。顶栏"断开"按钮走这里。
+    func disconnectFocused() {
+        guard let tab = focusedActiveRemoteTab else { return }
         tab.disconnectIfNeeded()
         engine.appendLog("已断开连接")
     }

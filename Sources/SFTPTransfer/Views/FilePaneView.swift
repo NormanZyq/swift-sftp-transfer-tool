@@ -49,6 +49,10 @@ struct FilePaneView: View {
         .onAppear {
             pathField = pane.currentPath
             installQuickPropertyMonitor()
+            // 面板被显示时把焦点切到所在列（顶栏的服务器选择 / 连接按钮随之动态变化）
+            if let column = app.column(forPane: pane) {
+                app.setFocus(to: column)
+            }
         }
         .onDisappear {
             removeQuickPropertyMonitor()

@@ -111,53 +111,72 @@ struct ContentView: View {
     private var topBar: some View {
         @Bindable var app = app
         return HStack(spacing: 10) {
-            Text("服务器")
-            Picker("", selection: Binding(
-                get: { app.selectedHostID },
-                set: { app.selectHost($0) }
-            )) {
-                Text("（无）").tag(Optional<HostEntry.ID>.none)
-                ForEach(app.hosts) { host in
-                    Text(host.display).tag(Optional(host.id))
+            // 顶栏的服务器选择下拉框与连接 / 断开按钮全部跟随焦点列动态变化：
+            // 用户点左边的 tab / 文件窗口 → 顶栏指向左列的远程 tab；
+            // 点右边的 → 顶栏指向右列的远程 tab。
+            // 焦点列没有远程 tab 时，整个服务器选择区域隐藏。
+            if app.focusedActiveRemoteTab != nil || !app.focusedColumn.tabs.isEmpty {
+                // 焦点列存在远程 tab：显示 picker
+                if app.focusedActiveRemoteTab != nil {
+                    Text("服务器")
+                    Picker("", selection: Binding(
+                        get: { app.selectedHostID },
+                        set: { app.selectHost($0) }
+                    )) {
+                        Text("（无）").tag(Optional<HostEntry.ID>.none)
+                        ForEach(app.hosts) { host in
+                            Text(host.display).tag(Optional(host.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 360)
+                }
+
+                Button {
+                    app.serverConfigPresented = true
+                } label: {
+                    Label("配置服务器", systemImage: "slider.horizontal.3")
+                }
+                .help("配置服务器")
+
+                if let tab = app.focusedActiveRemoteTab {
+                    if tab.state == .connected {
+                        Button("断开") { app.disconnectFocused() }
+                    } else {
+                        Button(tab.state == .connecting ? "连接中…" : "连接") {
+                            app.connectFocused()
+                        }
+                        .disabled(!app.canConnectFocused)
+                    }
+                    if tab.state == .connecting { ProgressView().controlSize(.small) }
                 }
             }
-            .labelsHidden()
-            .frame(maxWidth: 360)
-
-            Button {
-                app.serverConfigPresented = true
-            } label: {
-                Label("配置服务器", systemImage: "slider.horizontal.3")
-            }
-            .help("配置服务器")
-
-            if let tab = app.activeRemoteTab, tab.state == .connected {
-                Button("断开") { app.disconnect() }
-            } else {
-                Button(app.activeRemoteTab?.state == .connecting ? "连接中…" : "连接") {
-                    app.connect()
-                }
-                .disabled(!app.canConnect)
-            }
-            if app.activeRemoteTab?.state == .connecting { ProgressView().controlSize(.small) }
 
             Spacer()
 
+            // 状态指示也跟随焦点列
             Circle()
-                .fill(statusColor)
+                .fill(focusedStatusColor)
                 .frame(width: 10, height: 10)
-            Text(app.activeRemoteTab?.statusText ?? "未连接")
+            Text(focusedStatusText)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var statusColor: Color {
-        switch app.activeRemoteTab?.state {
+    private var focusedStatusColor: Color {
+        switch app.focusedActiveRemoteTab?.state {
         case .connected:    return .green
         case .connecting:   return .orange
         case .disconnected: return .gray
         case .none:         return .gray
         }
+    }
+
+    private var focusedStatusText: String {
+        if let tab = app.focusedActiveRemoteTab {
+            return tab.statusText
+        }
+        return "未连接"
     }
 
     // MARK: 传输按钮

@@ -387,7 +387,10 @@ struct ColumnTabBarView: View {
             },
             addLabel: {
                 AddMenuButton(help: "新建标签或打开新连接") {
-                    Button("新建本地标签") { app.addLocalTab(in: column) }
+                    Button("新建本地标签") {
+                        app.setFocus(to: column)
+                        app.addLocalTab(in: column)
+                    }
                     if !app.hosts.isEmpty {
                         Divider()
                         ForEach(app.hosts) { host in
@@ -408,16 +411,23 @@ struct ColumnTabBarView: View {
                     )
                 }
             },
-            onClose: { index in closeTab(at: index) },
-            onSelect: { index in column.select(index) },
+            onClose: { index in
+                closeTab(at: index)
+            },
+            onSelect: { index in
+                column.select(index)
+                // tab 切换 → 焦点切到本列
+                app.setFocus(to: column)
+            },
             draggable: { tab in
                 TabTransferRef(sourceColumnID: column.id, tabID: tab.id)
             }
         )
         .dropDestination(for: TabTransferRef.self) { refs, _ in
             guard let ref = refs.first else { return false }
-            // 来自其它列的 tab 移到本列
+            // 来自其它列的 tab 移到本列，同时切焦点
             app.moveTab(fromSourceColumnID: ref.sourceColumnID, tabID: ref.tabID, to: column)
+            app.setFocus(to: column)
             return true
         }
     }
@@ -450,17 +460,19 @@ struct ColumnTabBarView: View {
 
     private func createAndConnect(_ host: HostEntry) {
         duplicateHostPrompt = nil
-        // 默认把新远程 tab 加到右侧列（保持向后兼容）
-        app.addRemoteTab(host: host, in: app.rightColumn)
+        // 新建 + 连接：始终建在本列（用户在哪个列点 +，就建到哪个列）。
+        app.setFocus(to: column)
+        app.addRemoteTab(host: host, in: column)
         app.connect()
     }
 
     private func focusFirstInstance(of host: HostEntry) {
         duplicateHostPrompt = nil
-        // 在右侧列里跳到第一个匹配项
-        for (idx, tab) in app.rightColumn.tabs.enumerated() {
+        // 在本列内查找匹配项
+        for (idx, tab) in column.tabs.enumerated() {
             if case .remote(let rtab) = tab, rtab.host?.id == host.id {
-                app.rightColumn.select(idx)
+                column.select(idx)
+                app.setFocus(to: column)
                 return
             }
         }
