@@ -288,6 +288,9 @@ final class AppModel {
     }
 
     private func assign(_ host: HostEntry, to tab: RemoteTab) {
+        if tab.host?.id != host.id {
+            tab.shouldRestorePathOnNextConnect = false
+        }
         tab.host = host
         tab.pane.remoteTitle = "\(host.user)@\(host.alias)"
         selectedHostID = host.id
@@ -366,9 +369,8 @@ final class AppModel {
             tab.state = .connected
             tab.statusText = "已连接 \(host.alias)"
             engine.appendLog("✓ 已连接 \(host.alias)")
-            let home = (try? await tab.session.homeDirectory()) ?? "/"
-            tab.pane.seedHistory(home)
-            await tab.pane.reload()
+            try await loadInitialRemoteDirectory(for: tab)
+            tab.shouldRestorePathOnNextConnect = false
         } catch {
             switch validator.outcome {
             case .unknown(let info):
@@ -387,11 +389,79 @@ final class AppModel {
         }
     }
 
+    private func loadInitialRemoteDirectory(for tab: RemoteTab) async throws {
+        let home: String
+        do {
+            home = try await tab.session.homeDirectory()
+        } catch {
+            if SFTPSession.isConnectionLost(error) { throw error }
+            home = "/"
+        }
+
+        let restorePath = tab.shouldRestorePathOnNextConnect ? tab.pane.currentPath : nil
+        if let restorePath, !restorePath.isEmpty {
+            do {
+                let items = try await tab.session.list(restorePath)
+                applyRemoteListing(items, path: restorePath, to: tab.pane)
+                if restorePath != home {
+                    engine.appendLog("已恢复远程目录 \(restorePath)")
+                }
+                return
+            } catch {
+                if SFTPSession.isConnectionLost(error) { throw error }
+                engine.appendLog("无法恢复远程目录 \(restorePath)，已回到初始目录：\(error.localizedDescription)")
+            }
+        }
+
+        let items = try await tab.session.list(home)
+        applyRemoteListing(items, path: home, to: tab.pane)
+    }
+
+    private func applyRemoteListing(_ items: [FileItem], path: String, to pane: PaneModel) {
+        pane.seedHistory(path)
+        pane.items = items
+        pane.selection = []
+        pane.searchResults = nil
+    }
+
     /// 断开当前活跃远程 tab。
     func disconnect() {
         guard let tab = activeRemoteTab else { return }
         tab.disconnectIfNeeded()
         engine.appendLog("已断开连接")
+    }
+
+    @discardableResult
+    func handleRemoteOperationFailure(_ error: Error,
+                                      pane: PaneModel,
+                                      action: String,
+                                      showAlert: Bool = true) -> Bool {
+        if SFTPSession.isConnectionLost(error),
+           let tab = remoteTabs.first(where: { $0.pane === pane }) {
+            markConnectionLost(tab, action: action, showAlert: showAlert)
+            return true
+        }
+        engine.appendLog("✗ \(action)：\(error.localizedDescription)")
+        if showAlert {
+            errorMessage = "\(action)：\(error.localizedDescription)"
+        }
+        return false
+    }
+
+    private func markConnectionLost(_ tab: RemoteTab, action: String, showAlert: Bool = true) {
+        guard tab.state != .disconnected else { return }
+        tab.state = .disconnected
+        tab.statusText = "连接已断开"
+        tab.shouldRestorePathOnNextConnect = true
+        tab.pane.selection = []
+        tab.pane.searchResults = nil
+        let hostName = tab.host?.alias ?? "服务器"
+        let message = "与 \(hostName) 的连接已断开，请重新连接后重试。"
+        engine.appendLog("✗ \(action)：\(message)")
+        if showAlert { errorMessage = message }
+        Task { [session = tab.session] in
+            await session.disconnect()
+        }
     }
 
     private func fail(_ error: Error) {
@@ -418,9 +488,13 @@ final class AppModel {
                 isDirectory: item.isDirectory
             )
         }
-        transferTask = Task { [engine, tab] in
-            await engine.run(requests, session: tab.session)
-            await tab.pane.reload()
+        transferTask = Task { [weak self, engine, tab] in
+            let result = await engine.run(requests, session: tab.session)
+            if result.connectionLost {
+                self?.markConnectionLost(tab, action: "上传")
+            } else {
+                await tab.pane.reload()
+            }
         }
     }
 
@@ -441,8 +515,11 @@ final class AppModel {
                 isDirectory: item.isDirectory
             )
         }
-        transferTask = Task { [engine, tab, localPane] in
-            await engine.run(requests, session: tab.session)
+        transferTask = Task { [weak self, engine, tab, localPane] in
+            let result = await engine.run(requests, session: tab.session)
+            if result.connectionLost {
+                self?.markConnectionLost(tab, action: "下载")
+            }
             await localPane.reload()
         }
     }
@@ -460,9 +537,13 @@ final class AppModel {
                 isDirectory: LocalFileSystem.isDirectory(path)
             )
         }
-        transferTask = Task { [engine, tab] in
-            await engine.run(requests, session: tab.session)
-            await tab.pane.reload()
+        transferTask = Task { [weak self, engine, tab] in
+            let result = await engine.run(requests, session: tab.session)
+            if result.connectionLost {
+                self?.markConnectionLost(tab, action: "上传")
+            } else {
+                await tab.pane.reload()
+            }
         }
     }
 
@@ -480,9 +561,12 @@ final class AppModel {
                 isDirectory: ref.isDirectory
             )
         }
-        transferTask = Task { [engine, tab] in
-            await engine.run(requests, session: tab.session)
-            if let localPane = activeLocalPane { await localPane.reload() }
+        transferTask = Task { [weak self, engine, tab] in
+            let result = await engine.run(requests, session: tab.session)
+            if result.connectionLost {
+                self?.markConnectionLost(tab, action: "下载")
+            }
+            if let localPane = self?.activeLocalPane { await localPane.reload() }
         }
     }
 

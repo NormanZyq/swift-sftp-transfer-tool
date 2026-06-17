@@ -316,6 +316,7 @@ struct FilePaneView: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 propertyState = .failed(error.localizedDescription)
+                app.handleRemoteOperationFailure(error, pane: pane, action: "读取远程属性失败", showAlert: false)
             }
         }
     }
@@ -396,6 +397,7 @@ struct FilePaneView: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 quickPropertyState = .failed(error.localizedDescription)
+                app.handleRemoteOperationFailure(error, pane: pane, action: "读取远程属性失败", showAlert: false)
             }
         }
     }

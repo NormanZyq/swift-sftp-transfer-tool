@@ -18,6 +18,8 @@ final class RemoteTab: Identifiable {
 
     var state: ConnectionState = .disconnected
     var statusText = "未连接"
+    /// 连接被动丢失后，下次重连优先回到断线前的 `pane.currentPath`。
+    var shouldRestorePathOnNextConnect = false
 
     /// 自己的 SFTP 通道（独立 actor），与其他 tab 不共享。
     let session = SFTPSession()
@@ -48,6 +50,7 @@ final class RemoteTab: Identifiable {
             await session.disconnect()
             self.pane.items = []
             self.pane.selection = []
+            self.shouldRestorePathOnNextConnect = false
             self.state = .disconnected
             self.statusText = "未连接"
         }

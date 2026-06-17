@@ -1,13 +1,17 @@
 import Foundation
 import Citadel
 import NIOCore
+import NIOSSH
 import Logging
 
 enum SFTPSessionError: LocalizedError {
     case notConnected
+    case connectionLost
+
     var errorDescription: String? {
         switch self {
         case .notConnected: return "尚未连接到服务器"
+        case .connectionLost: return "连接已断开，请重新连接后重试"
         }
     }
 }
@@ -48,27 +52,50 @@ actor SFTPSession {
     }
 
     func disconnect() async {
-        if let sftp { try? await sftp.close() }
-        if let client { try? await client.close() }
+        await closeStoredConnections()
+    }
+
+    private func closeStoredConnections() async {
+        let sftp = self.sftp
+        let client = self.client
         self.sftp = nil
         self.client = nil
         self.host = nil
+        if let sftp { try? await sftp.close() }
+        if let client { try? await client.close() }
     }
 
     private func requireSFTP() throws -> SFTPClient {
         guard let sftp else { throw SFTPSessionError.notConnected }
+        guard sftp.isActive else { throw SFTPSessionError.connectionLost }
         return sftp
+    }
+
+    private func withSFTP<T>(_ operation: (SFTPClient) async throws -> T) async throws -> T {
+        let sftp = try requireSFTP()
+        do {
+            return try await operation(sftp)
+        } catch {
+            if Self.isConnectionLost(error) {
+                await closeStoredConnections()
+                throw SFTPSessionError.connectionLost
+            }
+            throw error
+        }
     }
 
     // MARK: 浏览 / 增删改
 
     func homeDirectory() async throws -> String {
-        try await requireSFTP().getRealPath(atPath: ".")
+        try await withSFTP { sftp in
+            try await sftp.getRealPath(atPath: ".")
+        }
     }
 
     func list(_ path: String) async throws -> [FileItem] {
-        let sftp = try requireSFTP()
-        let names = try await sftp.listDirectory(atPath: path)
+        let names = try await withSFTP { sftp in
+            try await sftp.listDirectory(atPath: path)
+        }
         var items: [FileItem] = []
         for comp in names.flatMap({ $0.components }) {
             let name = comp.filename
@@ -87,36 +114,59 @@ actor SFTPSession {
     }
 
     func makeDirectory(at path: String) async throws {
-        try await requireSFTP().createDirectory(atPath: path)
+        try await withSFTP { sftp in
+            try await sftp.createDirectory(atPath: path)
+        }
     }
 
     /// 递归创建目录（mkdir -p）。已存在则跳过。
     func makeDirectoryRecursive(_ path: String) async throws {
         let sftp = try requireSFTP()
         if path.isEmpty || path == "/" || path == "." { return }
-        if (try? await sftp.getAttributes(at: path)) != nil { return } // 已存在
+        do {
+            _ = try await sftp.getAttributes(at: path)
+            return // 已存在
+        } catch {
+            if Self.isConnectionLost(error) {
+                await closeStoredConnections()
+                throw SFTPSessionError.connectionLost
+            }
+        }
         let parent = (path as NSString).deletingLastPathComponent
         if parent != path && !parent.isEmpty && parent != "/" {
             try await makeDirectoryRecursive(parent)
         }
-        try? await sftp.createDirectory(atPath: path)
+        do {
+            try await sftp.createDirectory(atPath: path)
+        } catch {
+            if Self.isConnectionLost(error) {
+                await closeStoredConnections()
+                throw SFTPSessionError.connectionLost
+            }
+            // 兼容并发创建或权限表现不标准的服务器：后续文件操作会给出最终错误。
+        }
     }
 
     func rename(from: String, to: String) async throws {
-        try await requireSFTP().rename(at: from, to: to)
+        try await withSFTP { sftp in
+            try await sftp.rename(at: from, to: to)
+        }
     }
 
     /// 删除：文件直接删；目录先递归删子项再 rmdir。
     func remove(path: String, isDirectory: Bool) async throws {
-        let sftp = try requireSFTP()
         if !isDirectory {
-            try await sftp.remove(at: path)
+            try await withSFTP { sftp in
+                try await sftp.remove(at: path)
+            }
             return
         }
         for child in try await list(path) {
             try await remove(path: child.path, isDirectory: child.isDirectory)
         }
-        try await sftp.rmdir(at: path)
+        try await withSFTP { sftp in
+            try await sftp.rmdir(at: path)
+        }
     }
 
     /// 递归收集目录下所有文件（不含目录本身），用于传输展开。
@@ -179,7 +229,12 @@ actor SFTPSession {
             if out.count >= limit { break }
             try Task.checkCancellation()
             let entries: [FileItem]
-            do { entries = try await list(current) } catch { continue }
+            do {
+                entries = try await list(current)
+            } catch {
+                if Self.isConnectionLost(error) { throw error }
+                continue
+            }
             for e in entries {
                 if !includeHidden && e.name.hasPrefix(".") { continue }
                 if e.name.lowercased().contains(q) {
@@ -199,67 +254,69 @@ actor SFTPSession {
     /// 上传单个本地文件到远程路径。progress(已传字节, 总字节)。
     func upload(localPath: String, remotePath: String,
                 onProgress: @Sendable (Int, Int) -> Void) async throws {
-        let sftp = try requireSFTP()
-        let total = (try? FileManager.default.attributesOfItem(atPath: localPath)[.size] as? NSNumber)??.intValue ?? 0
-        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: localPath))
-        defer { try? handle.close() }
+        try await withSFTP { sftp in
+            let total = (try? FileManager.default.attributesOfItem(atPath: localPath)[.size] as? NSNumber)??.intValue ?? 0
+            let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: localPath))
+            defer { try? handle.close() }
 
-        let file = try await sftp.openFile(filePath: remotePath, flags: [.write, .create, .truncate])
-        do {
-            var offset = 0
-            var lastReported = 0
-            onProgress(0, total)
-            while true {
-                try Task.checkCancellation()
-                let data = (try handle.read(upToCount: SFTPSession.chunkSize)) ?? Data()
-                if data.isEmpty { break }
-                try await file.write(ByteBuffer(bytes: data), at: UInt64(offset))
-                offset += data.count
-                if offset - lastReported >= (1 << 19) { // 每 ~512KB 汇报一次
-                    onProgress(offset, total)
-                    lastReported = offset
+            let file = try await sftp.openFile(filePath: remotePath, flags: [.write, .create, .truncate])
+            do {
+                var offset = 0
+                var lastReported = 0
+                onProgress(0, total)
+                while true {
+                    try Task.checkCancellation()
+                    let data = (try handle.read(upToCount: SFTPSession.chunkSize)) ?? Data()
+                    if data.isEmpty { break }
+                    try await file.write(ByteBuffer(bytes: data), at: UInt64(offset))
+                    offset += data.count
+                    if offset - lastReported >= (1 << 19) { // 每 ~512KB 汇报一次
+                        onProgress(offset, total)
+                        lastReported = offset
+                    }
                 }
+                onProgress(offset, total)
+                try await file.close()
+            } catch {
+                try? await file.close()
+                throw error
             }
-            onProgress(offset, total)
-            try await file.close()
-        } catch {
-            try? await file.close()
-            throw error
         }
     }
 
     /// 下载远程文件到本地路径。progress(已传字节, 总字节)。
     func download(remotePath: String, localPath: String,
                   onProgress: @Sendable (Int, Int) -> Void) async throws {
-        let sftp = try requireSFTP()
-        FileManager.default.createFile(atPath: localPath, contents: nil)
-        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: localPath))
-        defer { try? handle.close() }
+        try await withSFTP { sftp in
+            FileManager.default.createFile(atPath: localPath, contents: nil)
+            let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: localPath))
+            defer { try? handle.close() }
 
-        let file = try await sftp.openFile(filePath: remotePath, flags: .read)
-        do {
-            let total = Int((try await file.readAttributes()).size ?? 0)
-            var offset: UInt64 = 0
-            var lastReported = 0
-            onProgress(0, total)
-            while true {
-                try Task.checkCancellation()
-                let buffer = try await file.read(from: offset, length: UInt32(SFTPSession.chunkSize))
-                let count = buffer.readableBytes
-                if count == 0 { break }
-                var b = buffer
-                if let data = b.readData(length: count) { try handle.write(contentsOf: data) }
-                offset += UInt64(count)
-                if Int(offset) - lastReported >= (1 << 19) {
-                    onProgress(Int(offset), total)
-                    lastReported = Int(offset)
+            let file = try await sftp.openFile(filePath: remotePath, flags: .read)
+            do {
+                let total = Int((try await file.readAttributes()).size ?? 0)
+                var offset: UInt64 = 0
+                var lastReported = 0
+                onProgress(0, total)
+                while true {
+                    try Task.checkCancellation()
+                    let buffer = try await file.read(from: offset, length: UInt32(SFTPSession.chunkSize))
+                    let count = buffer.readableBytes
+                    if count == 0 { break }
+                    var b = buffer
+                    if let data = b.readData(length: count) { try handle.write(contentsOf: data) }
+                    offset += UInt64(count)
+                    if Int(offset) - lastReported >= (1 << 19) {
+                        onProgress(Int(offset), total)
+                        lastReported = Int(offset)
+                    }
                 }
+                onProgress(Int(offset), total)
+                try await file.close()
+            } catch {
+                try? await file.close()
+                throw error
             }
-            onProgress(Int(offset), total)
-            try await file.close()
-        } catch {
-            try? await file.close()
-            throw error
         }
     }
 
@@ -270,5 +327,47 @@ actor SFTPSession {
         if dir == "/" { return "/" + name }
         if dir.hasSuffix("/") { return dir + name }
         return dir + "/" + name
+    }
+
+    /// Citadel/NIO 在 idle timeout 后可能只在下一次 I/O 抛出通道错误。
+    /// 这里集中识别这类“会话已不可复用”的错误，避免 UI 继续显示已连接。
+    nonisolated static func isConnectionLost(_ error: Error) -> Bool {
+        if let sessionError = error as? SFTPSessionError {
+            switch sessionError {
+            case .connectionLost, .notConnected: return true
+            }
+        }
+        if let sftpError = error as? SFTPError {
+            switch sftpError {
+            case .connectionClosed, .missingResponse:
+                return true
+            case .errorStatus(let status):
+                return status.errorCode == .noConnection || status.errorCode == .connectionLost
+            default:
+                return false
+            }
+        }
+        if let status = error as? SFTPMessage.Status {
+            return status.errorCode == .noConnection || status.errorCode == .connectionLost
+        }
+        if let channelError = error as? ChannelError {
+            switch channelError {
+            case .ioOnClosedChannel, .alreadyClosed, .outputClosed, .inputClosed, .eof:
+                return true
+            default:
+                return false
+            }
+        }
+        if let sshError = error as? NIOSSHError {
+            return sshError.type == .tcpShutdown || sshError.type == .creatingChannelAfterClosure
+        }
+
+        let message = String(describing: error).lowercased()
+        return message.contains("connection reset")
+            || message.contains("broken pipe")
+            || message.contains("socket is not connected")
+            || message.contains("connection closed")
+            || message.contains("connection lost")
+            || message.contains("i/o on closed channel")
     }
 }

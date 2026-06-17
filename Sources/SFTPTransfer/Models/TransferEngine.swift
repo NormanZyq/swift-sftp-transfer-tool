@@ -38,6 +38,10 @@ final class TransferEngine {
         let id = UUID()
     }
 
+    struct RunResult: Sendable {
+        let connectionLost: Bool
+    }
+
     init() {}
 
     private static let timeFormatter: DateFormatter = {
@@ -53,8 +57,8 @@ final class TransferEngine {
     }
 
     /// 执行一批传输请求，使用调用方指定的 session。
-    func run(_ requests: [Request], session: SFTPSession) async {
-        guard !isRunning else { return }
+    func run(_ requests: [Request], session: SFTPSession) async -> RunResult {
+        guard !isRunning else { return RunResult(connectionLost: false) }
         isRunning = true
         defer {
             isRunning = false
@@ -64,10 +68,12 @@ final class TransferEngine {
         appendLog("开始处理 \(requests.count) 项")
         var tasks: [FileTask] = []
         var failed = 0
+        var connectionLost = false
         for r in requests {
             do {
                 tasks += try await expand(r, session: session)
             } catch {
+                if SFTPSession.isConnectionLost(error) { connectionLost = true }
                 appendLog("✗ 展开失败 \((r.srcPath as NSString).lastPathComponent): \(error.localizedDescription)")
                 failed += 1
             }
@@ -78,7 +84,7 @@ final class TransferEngine {
         guard !tasks.isEmpty else {
             appendLog("没有要传输的文件")
             lastOutcome = failed > 0 ? Outcome(kind: .failure, message: "传输失败") : nil
-            return
+            return RunResult(connectionLost: connectionLost)
         }
 
         var ensuredRemoteDirs = Set<String>()
@@ -119,8 +125,10 @@ final class TransferEngine {
             } catch is CancellationError {
                 break
             } catch {
+                if SFTPSession.isConnectionLost(error) { connectionLost = true }
                 appendLog("✗ \(currentName): \(error.localizedDescription)")
                 failed += 1
+                if connectionLost { break }
             }
         }
 
@@ -135,6 +143,7 @@ final class TransferEngine {
             appendLog("✓ 全部完成")
             lastOutcome = Outcome(kind: .success, message: "已完成 · \(done) 项")
         }
+        return RunResult(connectionLost: connectionLost)
     }
 
     /// 把一个请求展开成具体的文件任务（目录递归）。

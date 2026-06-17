@@ -102,27 +102,43 @@ final class PaneModel: Identifiable {
     // MARK: 浏览
 
     func reload() async {
+        _ = await reloadCurrentPath()
+    }
+
+    @discardableResult
+    private func reloadCurrentPath(showAlert: Bool = true) async -> Bool {
         searchResults = nil   // 任何刷新/导航都退出递归搜索结果模式
         switch kind {
         case .local:
             items = LocalFileSystem.list(currentPath, showHidden: true) // 全部取回，显示时再按开关过滤
             selection = []
+            return true
         case .remote:
-            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { items = []; return }
+            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else {
+                items = []
+                selection = []
+                return false
+            }
             isLoading = true
+            defer { isLoading = false }
             do {
                 items = try await session.list(currentPath)
+                selection = []
+                return true
             } catch {
-                app.engine.appendLog("✗ 无法列出 \(currentPath): \(error.localizedDescription)")
-                items = []
+                app.handleRemoteOperationFailure(error, pane: self, action: "无法列出 \(currentPath)", showAlert: showAlert)
+                selection = []
+                return false
             }
-            selection = []
-            isLoading = false
         }
     }
 
     /// 跳转并记入历史（截断当前位置之后的前进项；与上一条相同则不重复入栈）。
     func navigate(to path: String) {
+        let previousPath = currentPath
+        let previousHistory = history
+        let previousHistoryIndex = historyIndex
+
         if historyIndex < history.count - 1 {
             history.removeSubrange((historyIndex + 1)...)
         }
@@ -131,7 +147,14 @@ final class PaneModel: Identifiable {
         }
         historyIndex = history.count - 1
         currentPath = path
-        Task { await reload() }
+        Task {
+            let ok = await reloadCurrentPath()
+            if !ok {
+                currentPath = previousPath
+                history = previousHistory
+                historyIndex = previousHistoryIndex
+            }
+        }
     }
 
     /// 重置历史并定位到 path（用于初始化 / 连接后定位 home）。不触发 reload，由调用方刷新。
@@ -144,17 +167,33 @@ final class PaneModel: Identifiable {
     /// 历史后退（上一个访问过的目录）。
     func goBack() {
         guard canGoBack else { return }
+        let previousPath = currentPath
+        let previousHistoryIndex = historyIndex
         historyIndex -= 1
         currentPath = history[historyIndex]
-        Task { await reload() }
+        Task {
+            let ok = await reloadCurrentPath()
+            if !ok {
+                currentPath = previousPath
+                historyIndex = previousHistoryIndex
+            }
+        }
     }
 
     /// 历史前进（下一个访问过的目录）。
     func goForward() {
         guard canGoForward else { return }
+        let previousPath = currentPath
+        let previousHistoryIndex = historyIndex
         historyIndex += 1
         currentPath = history[historyIndex]
-        Task { await reload() }
+        Task {
+            let ok = await reloadCurrentPath()
+            if !ok {
+                currentPath = previousPath
+                historyIndex = previousHistoryIndex
+            }
+        }
     }
 
     func open(_ item: FileItem) {
@@ -182,7 +221,11 @@ final class PaneModel: Identifiable {
         case .remote:
             guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { return }
             Task {
-                if let home = try? await session.homeDirectory() { navigate(to: home) }
+                do {
+                    navigate(to: try await session.homeDirectory())
+                } catch {
+                    app.handleRemoteOperationFailure(error, pane: self, action: "无法读取远程主目录")
+                }
             }
         }
     }
@@ -208,7 +251,7 @@ final class PaneModel: Identifiable {
             do {
                 searchResults = try await session.search(in: dir, query: query, includeHidden: hidden)
             } catch {
-                app.engine.appendLog("✗ 搜索失败：\(error.localizedDescription)")
+                app.handleRemoteOperationFailure(error, pane: self, action: "搜索失败")
                 searchResults = []
             }
         }
@@ -234,7 +277,11 @@ final class PaneModel: Identifiable {
                 }
                 await reload()
             } catch {
-                app?.errorMessage = "新建文件夹失败：\(error.localizedDescription)"
+                if kind == .remote, app?.handleRemoteOperationFailure(error, pane: self, action: "新建文件夹失败") == true {
+                    return
+                } else {
+                    app?.errorMessage = "新建文件夹失败：\(error.localizedDescription)"
+                }
             }
         }
     }
@@ -254,7 +301,11 @@ final class PaneModel: Identifiable {
                 }
                 await reload()
             } catch {
-                app?.errorMessage = "重命名失败：\(error.localizedDescription)"
+                if kind == .remote, app?.handleRemoteOperationFailure(error, pane: self, action: "重命名失败") == true {
+                    return
+                } else {
+                    app?.errorMessage = "重命名失败：\(error.localizedDescription)"
+                }
             }
         }
     }
@@ -272,6 +323,10 @@ final class PaneModel: Identifiable {
                         try await session.remove(path: item.path, isDirectory: item.isDirectory)
                     }
                 } catch {
+                    if kind == .remote,
+                       app?.handleRemoteOperationFailure(error, pane: self, action: "删除「\(item.name)」失败") == true {
+                        return
+                    }
                     app?.errorMessage = "删除「\(item.name)」失败：\(error.localizedDescription)"
                 }
             }
