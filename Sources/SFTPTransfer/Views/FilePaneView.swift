@@ -46,13 +46,14 @@ struct FilePaneView: View {
         }
         .animation(.spring(response: 0.24, dampingFraction: 0.88), value: quickPropertyTarget?.id)
         .onHover { isHoveringForQuickProperties = $0 }
+        .background {
+            PaneFocusTrackingView {
+                focusThisPane()
+            }
+        }
         .onAppear {
             pathField = pane.currentPath
             installQuickPropertyMonitor()
-            // 面板被显示时把焦点切到所在列（顶栏的服务器选择 / 连接按钮随之动态变化）
-            if let column = app.column(forPane: pane) {
-                app.setFocus(to: column)
-            }
         }
         .onDisappear {
             removeQuickPropertyMonitor()
@@ -317,6 +318,12 @@ struct FilePaneView: View {
         }
     }
 
+    private func focusThisPane() {
+        if let column = app.column(forPane: pane) {
+            app.setFocus(to: column)
+        }
+    }
+
     private func installQuickPropertyMonitor() {
         guard quickKeyMonitor == nil else { return }
         quickKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -412,6 +419,64 @@ struct FilePaneView: View {
         }
         return pane.isRemote ? "确定删除选中的 \(deleteTargets.count) 项？此操作不可撤销。"
                              : "把选中的 \(deleteTargets.count) 项移到废纸篓？"
+    }
+}
+
+/// 只负责把“鼠标事件落在这个文件面板里”上报给 SwiftUI。
+/// 用本地事件监听而不是透明 overlay，避免拦截 Table、按钮、文本框的原有交互。
+private struct PaneFocusTrackingView: NSViewRepresentable {
+    var onFocus: () -> Void
+
+    func makeNSView(context: Context) -> FocusTrackingNSView {
+        let view = FocusTrackingNSView()
+        view.onFocus = onFocus
+        return view
+    }
+
+    func updateNSView(_ nsView: FocusTrackingNSView, context: Context) {
+        nsView.onFocus = onFocus
+    }
+
+    final class FocusTrackingNSView: NSView {
+        var onFocus: (() -> Void)?
+        private var mouseMonitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                removeMouseMonitor()
+            } else {
+                installMouseMonitor()
+            }
+        }
+
+        deinit {
+            removeMouseMonitor()
+        }
+
+        private func installMouseMonitor() {
+            removeMouseMonitor()
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] event in
+                self?.handle(event)
+                return event
+            }
+        }
+
+        private func removeMouseMonitor() {
+            if let mouseMonitor {
+                NSEvent.removeMonitor(mouseMonitor)
+                self.mouseMonitor = nil
+            }
+        }
+
+        private func handle(_ event: NSEvent) {
+            guard let window, event.window === window else { return }
+            let point = convert(event.locationInWindow, from: nil)
+            guard bounds.contains(point) else { return }
+            onFocus?()
+        }
     }
 }
 

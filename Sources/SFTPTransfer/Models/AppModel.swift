@@ -201,26 +201,42 @@ final class AppModel {
         return rightColumn
     }
 
-    /// 焦点列活跃的远程 tab。顶栏 host picker / 连接按钮都看这个。
+    /// 焦点列活跃的远程 tab。顶栏在远程聚焦时用它保持原有换服务器行为。
     var focusedActiveRemoteTab: RemoteTab? { focusedColumn.activeRemoteTab }
+
+    /// 焦点列活跃项是否是本地目录。此时顶栏 picker 显示"本地目录"占位；
+    /// 用户选中服务器后，连接按钮会在对侧新建远程会话。
+    var isFocusedLocalTab: Bool {
+        focusedColumn.activeTab?.isLocal == true
+    }
 
     /// 焦点列的活跃远程 tab 是否已连接。
     var isFocusedRemoteTabConnected: Bool {
         focusedActiveRemoteTab?.isConnected == true
     }
 
-    /// 焦点列是否可发起连接：活跃远程 tab 存在、有 host、未在连接中。
+    /// 焦点列是否可发起连接：
+    /// - 远程聚焦：沿用原行为，连接当前远程 tab。
+    /// - 本地聚焦：已在 picker 中选中服务器时，在对侧新建远程 tab 并连接。
     var canConnectFocused: Bool {
-        guard let tab = focusedActiveRemoteTab, tab.host != nil else { return false }
-        return tab.state == .disconnected
+        if let tab = focusedActiveRemoteTab {
+            guard tab.host != nil else { return false }
+            return tab.state == .disconnected
+        }
+        if isFocusedLocalTab, let selectedHostID {
+            return hosts.contains { $0.id == selectedHostID }
+        }
+        return false
     }
 
     /// 视图层调用：把焦点切到某列。Tab 选中、面板点击、+ 按钮等都通过这里改焦点。
     func setFocus(to column: PaneColumnModel) {
         focusedColumnID = column.id
-        // 同步顶栏 picker：让 picker 反映新焦点列活跃远程 tab 的 host
+        // 同步顶栏 picker：远程焦点显示对应 host；本地焦点回到"本地目录"占位。
         if let active = focusedActiveRemoteTab {
             selectedHostID = active.host?.id
+        } else if isFocusedLocalTab {
+            selectedHostID = nil
         }
     }
 
@@ -242,10 +258,13 @@ final class AppModel {
         return tab.state == .disconnected
     }
 
-    /// 顶栏 host picker 只替换焦点列活跃远程 tab 的主机，不跨列 / 跨 tab 查找或切换。
+    /// 顶栏 host picker：
+    /// - 远程聚焦时只替换焦点列活跃远程 tab 的主机，不跨列 / 跨 tab 查找或切换。
+    /// - 本地聚焦时只记录待连接主机，等用户点"连接"再在对侧新建远程 tab。
     /// 若该 tab 已有连接，则先断开旧会话，再自动连接到新选中的主机。
     func selectHost(_ id: HostEntry.ID?) {
         selectedHostID = id
+        guard !isFocusedLocalTab else { return }
         guard let id,
               let host = hosts.first(where: { $0.id == id }),
               let tab = focusedActiveRemoteTab,
@@ -440,10 +459,35 @@ final class AppModel {
 
     /// 连接焦点列的活跃远程 tab。顶栏"连接"按钮 / 菜单命令都走这里。
     func connectFocused(passphrase: String? = nil) {
+        if focusedActiveRemoteTab == nil, isFocusedLocalTab {
+            connectSelectedHostOppositeFocusedLocal(passphrase: passphrase)
+            return
+        }
+
         guard let tab = focusedActiveRemoteTab, let host = tab.host, tab.state == .disconnected else { return }
         tab.state = .connecting
         tab.statusText = "连接中 \(host.alias)…"
 
+        Task { [weak self] in
+            await self?.runConnect(tab: tab, host: host, passphrase: passphrase)
+        }
+    }
+
+    /// 本地目录获得焦点时，顶栏连接会在该本地会话的对侧直接创建远程 tab。
+    /// 这里故意不走 tab 栏的重复主机检测：用户从本地目录发起连接时，每次都是一个新会话。
+    private func connectSelectedHostOppositeFocusedLocal(passphrase: String?) {
+        guard let sourceTab = focusedColumn.activeTab,
+              sourceTab.isLocal,
+              let selectedHostID,
+              let host = hosts.first(where: { $0.id == selectedHostID }) else { return }
+
+        let destinationColumn = focusedColumn.id == leftColumn.id ? rightColumn : leftColumn
+        let tab = addRemoteTab(host: host, in: destinationColumn)
+        setFocus(to: destinationColumn)
+
+        guard tab.state == .disconnected else { return }
+        tab.state = .connecting
+        tab.statusText = "连接中 \(host.alias)…"
         Task { [weak self] in
             await self?.runConnect(tab: tab, host: host, passphrase: passphrase)
         }

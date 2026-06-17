@@ -111,26 +111,23 @@ struct ContentView: View {
     private var topBar: some View {
         @Bindable var app = app
         return HStack(spacing: 10) {
-            // 顶栏的服务器选择下拉框与连接 / 断开按钮全部跟随焦点列动态变化：
-            // 用户点左边的 tab / 文件窗口 → 顶栏指向左列的远程 tab；
-            // 点右边的 → 顶栏指向右列的远程 tab。
-            // 焦点列没有远程 tab 时，整个服务器选择区域隐藏。
-            if app.focusedActiveRemoteTab != nil || !app.focusedColumn.tabs.isEmpty {
-                // 焦点列存在远程 tab：显示 picker
-                if app.focusedActiveRemoteTab != nil {
-                    Text("服务器")
-                    Picker("", selection: Binding(
-                        get: { app.selectedHostID },
-                        set: { app.selectHost($0) }
-                    )) {
-                        Text("（无）").tag(Optional<HostEntry.ID>.none)
-                        ForEach(app.hosts) { host in
-                            Text(host.display).tag(Optional(host.id))
-                        }
+            // 顶栏的服务器选择下拉框与连接 / 断开按钮跟随焦点会话：
+            // 远程会话聚焦时沿用原行为；本地会话聚焦时显示"本地目录"占位，
+            // 用户选择服务器后，"连接"会在该本地会话的对侧新建远程会话。
+            if app.focusedColumn.activeTab != nil {
+                Text("服务器")
+                Picker("", selection: Binding(
+                    get: { app.selectedHostID },
+                    set: { app.selectHost($0) }
+                )) {
+                    Text(app.isFocusedLocalTab ? "本地目录" : "（无）")
+                        .tag(Optional<HostEntry.ID>.none)
+                    ForEach(app.hosts) { host in
+                        Text(host.display).tag(Optional(host.id))
                     }
-                    .labelsHidden()
-                    .frame(maxWidth: 360)
                 }
+                .labelsHidden()
+                .frame(maxWidth: 360)
 
                 Button {
                     app.serverConfigPresented = true
@@ -149,6 +146,11 @@ struct ContentView: View {
                         .disabled(!app.canConnectFocused)
                     }
                     if tab.state == .connecting { ProgressView().controlSize(.small) }
+                } else {
+                    Button("连接") {
+                        app.connectFocused()
+                    }
+                    .disabled(!app.canConnectFocused)
                 }
             }
 
