@@ -9,7 +9,7 @@ import Observation
 /// 由于 PaneModel / RemoteTab 都是 `@MainActor @Observable`，本枚举的所有访问器都
 /// 必须在主 actor 上调用。枚举本身标记为 `@MainActor` 以反映这一点。
 @MainActor
-enum BrowserTab: @MainActor Identifiable {
+enum BrowserTab: @preconcurrency Identifiable {
     case local(PaneModel)
     case remote(RemoteTab)
 
