@@ -10,6 +10,15 @@
 - 常规文件传输不需要额外依赖
 - “挂载”功能需要本机已经安装 macFUSE 和 sshfs；没有安装时，应用会直接提示该功能不可用
 
+## 下载
+
+在 GitHub Releases 页面下载适合自己 Mac 的安装包：
+
+- Apple Silicon（M1/M2/M3/M4 等）：下载 `SFTPTransfer-macOS-<版本号>-arm64.dmg`
+- Intel 芯片 Mac：下载 `SFTPTransfer-macOS-<版本号>-x86_64.dmg`
+
+如果不确定芯片类型，可以点 macOS 左上角苹果菜单，选择“关于本机”查看。
+
 ## 使用方式
 
 1. 打开应用后，从顶部“服务器”下拉框选择一台主机。
