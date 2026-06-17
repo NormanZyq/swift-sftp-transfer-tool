@@ -130,4 +130,16 @@ enum LocalFileSystem {
             NSWorkspace.shared.activateFileViewerSelecting(urls)
         }
     }
+
+    static func openInTerminal(_ path: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-a", "Terminal", path]
+        try? process.run()
+    }
+
+    static func copyPath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
 }

@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var toastDismiss: Task<Void, Never>?
     /// 待处理的传输请求（远程中转未确认时暂存）。
     @State private var pendingRelay: AppModel.TransferSnapshot?
+    @State private var pendingMount: MountRequest?
+    @State private var mountManagerPresented = false
     /// 折叠明细的自然高度（测量得到），折叠动画在 0 ↔ 该高度之间插值。
     @State private var detailHeight: CGFloat = 0
 
@@ -67,6 +69,10 @@ struct ContentView: View {
         // 服务器配置
         .sheet(isPresented: $app.serverConfigPresented) {
             ServerConfigView()
+        }
+        // 挂载管理
+        .sheet(isPresented: $mountManagerPresented) {
+            MountManagementView()
         }
         // 未知主机 TOFU 确认
         .alert("未知主机", isPresented: Binding(get: { app.hostKeyPrompt != nil },
@@ -208,7 +214,23 @@ struct ContentView: View {
                 Label("取消", systemImage: "xmark.circle")
             }
             .disabled(!app.engine.isRunning)
+
             Spacer()
+
+            Button {
+                beginMount()
+            } label: {
+                Label("挂载", systemImage: app.mountButtonSystemImage)
+            }
+            .disabled(!app.canMountCurrentPair)
+            .help("将当前远程目录挂载到当前本地空目录")
+
+            Button {
+                app.mountManager.refreshStatuses()
+                mountManagerPresented = true
+            } label: {
+                Label("管理挂载…", systemImage: "externaldrive")
+            }
         }
         .confirmationDialog(
             "远程中转提示",
@@ -227,6 +249,23 @@ struct ContentView: View {
             Button("取消", role: .cancel) { pendingRelay = nil }
         } message: {
             Text("本次传输会在两台远程服务器之间通过本机中转，会在硬盘上产生临时文件。\n\n确认后下次传输将不再询问。")
+        }
+        .confirmationDialog(
+            "确认挂载",
+            isPresented: Binding(
+                get: { pendingMount != nil },
+                set: { if !$0 { pendingMount = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingMount
+        ) { request in
+            Button("挂载") {
+                pendingMount = nil
+                app.performMount(request)
+            }
+            Button("取消", role: .cancel) { pendingMount = nil }
+        } message: { request in
+            Text("将把远程目录\n\(request.expectedSource)\n挂载到本地空目录：\n\(request.localPath)\n\n不会删除、移动或覆盖本地目录。若目录不为空或已经是挂载点，操作会被拒绝。")
         }
     }
 
@@ -256,6 +295,14 @@ struct ContentView: View {
             case .toLeft: app.transferToLeft()
             case .toRight: app.transferToRight()
             }
+        }
+    }
+
+    private func beginMount() {
+        do {
+            pendingMount = try app.makeMountRequestForCurrentPair()
+        } catch {
+            app.presentError(error)
         }
     }
 

@@ -28,6 +28,7 @@ final class AppModel {
 
     // MARK: 共享传输引擎
     let engine = TransferEngine()
+    let mountManager = MountManager()
 
     // MARK: 全局弹窗（来自最近一次 connect 流程的中间态）
     var errorMessage: String?
@@ -642,7 +643,70 @@ final class AppModel {
         engine.appendLog("✗ \(error.localizedDescription)")
     }
 
+    func presentError(_ error: Error) {
+        fail(error)
+    }
+
     // MARK: 传输
+
+    // MARK: 挂载
+
+    private enum MountPairDirection {
+        case remoteToLeft
+        case remoteToRight
+    }
+
+    private var currentMountPair: (remote: RemoteTab, local: PaneModel, direction: MountPairDirection)? {
+        guard let left = leftColumn.activeTab, let right = rightColumn.activeTab else { return nil }
+        if left.isLocal, let remote = right.remoteTab, remote.isConnected, remote.host != nil {
+            return (remote, left.pane, .remoteToLeft)
+        }
+        if right.isLocal, let remote = left.remoteTab, remote.isConnected, remote.host != nil {
+            return (remote, right.pane, .remoteToRight)
+        }
+        return nil
+    }
+
+    var canMountCurrentPair: Bool {
+        currentMountPair != nil && !mountManager.isMounting
+    }
+
+    var mountButtonSystemImage: String {
+        switch currentMountPair?.direction {
+        case .remoteToRight:
+            return "arrow.right.circle"
+        case .remoteToLeft:
+            return "arrow.left.circle"
+        case .none:
+            return "arrow.left.arrow.right.circle"
+        }
+    }
+
+    func makeMountRequestForCurrentPair() throws -> MountRequest {
+        guard let pair = currentMountPair, let host = pair.remote.host else {
+            throw MountError.commandFailed("当前左右会话需要一边是已连接远程目录，另一边是本地目录，才能挂载。")
+        }
+        return try mountManager.makeRequest(
+            host: host,
+            remotePath: pair.remote.pane.currentPath,
+            localPath: pair.local.currentPath
+        )
+    }
+
+    func performMount(_ request: MountRequest) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await mountManager.mount(request)
+                engine.appendLog("✓ 已挂载 \(request.expectedSource) → \(request.localPath)")
+                if let pane = [leftColumn.activePane, rightColumn.activePane].compactMap({ $0 }).first(where: { $0.currentPath == request.localPath }) {
+                    await pane.reload()
+                }
+            } catch {
+                fail(error)
+            }
+        }
+    }
 
     // MARK: 通用「传输到另一侧」
 
