@@ -46,6 +46,11 @@ struct FilePaneView: View {
         }
         .animation(.spring(response: 0.24, dampingFraction: 0.88), value: quickPropertyTarget?.id)
         .onHover { isHoveringForQuickProperties = $0 }
+        .background {
+            PaneFocusTrackingView {
+                focusThisPane()
+            }
+        }
         .onAppear {
             pathField = pane.currentPath
             installQuickPropertyMonitor()
@@ -226,16 +231,10 @@ struct FilePaneView: View {
             .width(min: 110, ideal: 150)
         } rows: {
             // 行级 .draggable：点到文字也能正常选中（单元格级 draggable 会拦截点击），并支持多选拖拽。
-            if pane.isRemote {
-                ForEach(pane.displayedItems) { item in
-                    TableRow(item)
-                        .draggable(RemoteItemRef(path: item.path, name: item.name, isDirectory: item.isDirectory))
-                }
-            } else {
-                ForEach(pane.displayedItems) { item in
-                    TableRow(item)
-                        .draggable(URL(fileURLWithPath: item.path))
-                }
+            // 统一使用 TransferItemRef：本地条目 → .local；远程条目 → .remote(tabID:)。
+            ForEach(pane.displayedItems) { item in
+                TableRow(item)
+                    .draggable(draggableRef(for: item))
             }
         }
         .contextMenu(forSelectionType: FileItem.ID.self) { ids in
@@ -247,22 +246,20 @@ struct FilePaneView: View {
         }
     }
 
+    /// 把当前面板的 FileItem 包装成对应的 TransferItemRef。
+    private func draggableRef(for item: FileItem) -> TransferItemRef {
+        if pane.isRemote, let tab = app.remoteTab(forPane: pane) {
+            return .remote(tabID: tab.id, path: item.path, name: item.name, isDirectory: item.isDirectory)
+        }
+        return .local(path: item.path, name: item.name, isDirectory: item.isDirectory)
+    }
+
     @ViewBuilder
     private var table: some View {
-        if pane.isRemote {
-            // 远程面板：接收来自本地 / 访达的 URL → 上传。
-            tableCore.dropDestination(for: URL.self) { urls, _ in
-                guard app.isActiveRemoteTabConnected else { return false }
-                app.dropLocalPaths(urls.map(\.path), toRemoteDir: pane.currentPath)
-                return true
-            }
-        } else {
-            // 本地面板：接收来自远程面板的条目 → 下载。
-            tableCore.dropDestination(for: RemoteItemRef.self) { refs, _ in
-                guard app.isActiveRemoteTabConnected else { return false }
-                app.dropRemoteItems(refs, toLocalDir: pane.currentPath)
-                return true
-            }
+        // 任何面板都接收统一 TransferItemRef；目标端点 = 当前面板的 endpoint。
+        tableCore.dropDestination(for: TransferItemRef.self) { refs, _ in
+            app.dropTransferItems(refs, into: pane)
+            return true
         }
     }
 
@@ -270,14 +267,14 @@ struct FilePaneView: View {
     private func menu(for ids: Set<FileItem.ID>) -> some View {
         let targets = pane.displayedItems.filter { ids.contains($0.id) }
         if pane.isRemote {
-            Button("下载") { pane.selection = ids; app.downloadSelection() }
-                .disabled(targets.isEmpty)
+            Button("下载") { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
+                .disabled(targets.isEmpty || !app.canUploadDownloadFromPaneToOpposite(pane))
             if targets.count == 1, let only = targets.first {
                 Button("查看属性…") { showRemoteProperties(for: only) }
             }
         } else {
-            Button("上传") { pane.selection = ids; app.uploadSelection() }
-                .disabled(targets.isEmpty || !app.isActiveRemoteTabConnected)
+            Button("上传") { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
+                .disabled(targets.isEmpty || !app.canUploadDownloadFromPaneToOpposite(pane))
         }
         if !pane.isRemote, !targets.isEmpty {
             Button("在访达中打开") { LocalFileSystem.revealInFinder(targets.map(\.path)) }
@@ -318,6 +315,12 @@ struct FilePaneView: View {
                 propertyState = .failed(error.localizedDescription)
                 app.handleRemoteOperationFailure(error, pane: pane, action: "读取远程属性失败", showAlert: false)
             }
+        }
+    }
+
+    private func focusThisPane() {
+        if let column = app.column(forPane: pane) {
+            app.setFocus(to: column)
         }
     }
 
@@ -416,6 +419,64 @@ struct FilePaneView: View {
         }
         return pane.isRemote ? "确定删除选中的 \(deleteTargets.count) 项？此操作不可撤销。"
                              : "把选中的 \(deleteTargets.count) 项移到废纸篓？"
+    }
+}
+
+/// 只负责把“鼠标事件落在这个文件面板里”上报给 SwiftUI。
+/// 用本地事件监听而不是透明 overlay，避免拦截 Table、按钮、文本框的原有交互。
+private struct PaneFocusTrackingView: NSViewRepresentable {
+    var onFocus: () -> Void
+
+    func makeNSView(context: Context) -> FocusTrackingNSView {
+        let view = FocusTrackingNSView()
+        view.onFocus = onFocus
+        return view
+    }
+
+    func updateNSView(_ nsView: FocusTrackingNSView, context: Context) {
+        nsView.onFocus = onFocus
+    }
+
+    final class FocusTrackingNSView: NSView {
+        var onFocus: (() -> Void)?
+        private var mouseMonitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                removeMouseMonitor()
+            } else {
+                installMouseMonitor()
+            }
+        }
+
+        deinit {
+            removeMouseMonitor()
+        }
+
+        private func installMouseMonitor() {
+            removeMouseMonitor()
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] event in
+                self?.handle(event)
+                return event
+            }
+        }
+
+        private func removeMouseMonitor() {
+            if let mouseMonitor {
+                NSEvent.removeMonitor(mouseMonitor)
+                self.mouseMonitor = nil
+            }
+        }
+
+        private func handle(_ event: NSEvent) {
+            guard let window, event.window === window else { return }
+            let point = convert(event.locationInWindow, from: nil)
+            guard bounds.contains(point) else { return }
+            onFocus?()
+        }
     }
 }
 

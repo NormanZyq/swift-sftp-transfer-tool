@@ -44,6 +44,11 @@ final class PaneModel: Identifiable {
         didSet { /* 仅供视图层观察以触发刷新；远程 I/O 路径直接读最新值 */ }
     }
 
+    /// 仅远程面板使用：所属 RemoteTab 的反向引用。
+    /// 用来判断"自己的远程 tab 是否已连接"，避免和"右侧全局活跃远程 tab"耦合。
+    /// 本地面板为 nil。
+    weak var owningRemoteTab: RemoteTab?
+
     init(kind: Kind) { self.kind = kind }
 
     /// 远程面板的标题由所属 tab 显式设置（"user@host:port" 之类），没设时退回 "远程"。
@@ -58,11 +63,12 @@ final class PaneModel: Identifiable {
 
     var isRemote: Bool { kind == .remote }
 
-    /// 本地面板始终可用；远程面板只在其所属 tab 当前活跃且已连接时可用。
-    /// 多 tab 模式下由 AppModel 在切换 tab 时刷新此值。
+    /// 本地面板始终可用；远程面板由"自己所属的 RemoteTab"决定可用性。
+    /// 不再依赖全局的"右侧活跃远程 tab"——左右两侧都能放任意远程 tab，
+    /// 每个面板各自看自己的连接状态。
     var isEnabled: Bool {
         if kind == .local { return true }
-        return app?.isActiveRemoteTabConnected == true
+        return owningRemoteTab?.isConnected == true
     }
 
     /// 当前展示的条目。
@@ -114,7 +120,7 @@ final class PaneModel: Identifiable {
             selection = []
             return true
         case .remote:
-            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else {
+            guard let app, let session = remoteSession, owningRemoteTab?.isConnected == true else {
                 items = []
                 selection = []
                 return false
@@ -219,7 +225,7 @@ final class PaneModel: Identifiable {
         case .local:
             navigate(to: LocalFileSystem.home)
         case .remote:
-            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { return }
+            guard let app, let session = remoteSession, owningRemoteTab?.isConnected == true else { return }
             Task {
                 do {
                     navigate(to: try await session.homeDirectory())
@@ -247,7 +253,7 @@ final class PaneModel: Identifiable {
                 LocalFileSystem.search(in: dir, query: query, includeHidden: hidden)
             }.value
         case .remote:
-            guard let app, app.isActiveRemoteTabConnected, let session = remoteSession else { searchResults = []; return }
+            guard let app, let session = remoteSession, owningRemoteTab?.isConnected == true else { searchResults = []; return }
             do {
                 searchResults = try await session.search(in: dir, query: query, includeHidden: hidden)
             } catch {

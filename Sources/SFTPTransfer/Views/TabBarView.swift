@@ -40,7 +40,10 @@ final class TabScrollModel {
 ///
 /// 之所以自己写横向滚动而不用 SwiftUI `ScrollView`：需要鼠标滚轮纵向→横向的映射、两端
 /// 渐隐、以及切换 tab 时把活动项滚到中央——这些用系统 ScrollView 都不好做。
-struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: View>: View {
+///
+/// `Drag: Transferable` 泛型支持让调用方决定每个 tab 是否可拖、拖什么。返回 nil 表示
+/// 该 tab 不可拖。配合 `dropDestination` 可以实现跨列移动 tab。
+struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: View, Drag: Transferable>: View {
     let items: [Item]
     @Binding var selectedIndex: Int
     let title: (Item) -> Title
@@ -48,6 +51,8 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
     let addLabel: () -> AddLabel
     let onClose: (Int) -> Void
     var onSelect: ((Int) -> Void)? = nil
+    /// 返回非 nil 时该 tab 可被拖拽，nil 时不可拖。
+    var draggable: ((Item) -> Drag?)? = nil
 
     @State private var hovered: Int? = nil
     @State private var scroll = TabScrollModel()
@@ -100,7 +105,7 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
             ZStack(alignment: .leading) {
                 HStack(alignment: .bottom, spacing: 1) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        TabChip(
+                        let chip = TabChip(
                             title: title(item),
                             accessory: accessory(item),
                             isSelected: index == selectedIndex,
@@ -123,6 +128,11 @@ struct TabBarView<Item: Identifiable, Title: View, Accessory: View, AddLabel: Vi
                                 )
                             }
                         )
+                        if let payload = draggable?(item) {
+                            chip.draggable(payload)
+                        } else {
+                            chip
+                        }
                     }
                 }
                 .padding(.horizontal, 6)
@@ -336,75 +346,60 @@ private struct TabChip<Title: View, Accessory: View>: View {
     }
 }
 
-// MARK: - 左侧本地 tab 栏
+// MARK: - 通用列 tab 栏
 
-/// 左侧本地 tab 栏。tab 标题 = 当前路径最后一段；点击 + 新建并定位到主目录。
-struct LocalTabBarView: View {
+/// 统一列 tab 栏：可承载任意混合的本地 / 远程 tab。+ 菜单可同时新建本地 tab 和打开远程连接。
+/// 取代了原来的 `LocalTabBarView` / `RemoteTabBarView`。
+struct ColumnTabBarView: View {
     @Environment(AppModel.self) private var app
-
-    var body: some View {
-        @Bindable var app = app
-        TabBarView(
-            items: app.localTabs,
-            selectedIndex: $app.selectedLocalTabIndex,
-            title: { pane in
-                Text(tabTitle(for: pane))
-                    .font(.system(size: 11.5, weight: paneIndex(pane) == app.selectedLocalTabIndex ? .semibold : .regular))
-            },
-            accessory: { _ in
-                Image(systemName: "folder")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-            },
-            addLabel: {
-                AddButton(help: "新建本地标签") { app.addLocalTab() }
-            },
-            onClose: { index in app.closeLocalTab(at: index) }
-        )
-    }
-
-    private func paneIndex(_ pane: PaneModel) -> Int {
-        app.localTabs.firstIndex(where: { $0.id == pane.id }) ?? -1
-    }
-
-    private func tabTitle(for pane: PaneModel) -> String {
-        let path = pane.currentPath
-        if path == "/" { return "/" }
-        let last = (path as NSString).lastPathComponent
-        return last.isEmpty ? path : last
-    }
-}
-
-// MARK: - 右侧远程 tab 栏
-
-/// 右侧远程 tab 栏。tab 标题 = 主机 alias；带连接状态小圆点；+ 弹出主机菜单并自动连接。
-struct RemoteTabBarView: View {
-    @Environment(AppModel.self) private var app
+    @Bindable var column: PaneColumnModel
     @State private var duplicateHostPrompt: HostEntry?
 
     var body: some View {
-        @Bindable var app = app
+        let app = app
+        // 整个 tab 栏作为 drop 目标：跨列移动 tab 在此处理。
+        // 同列 no-op（app.moveTab 内已做检查）。
         TabBarView(
-            items: app.remoteTabs,
-            selectedIndex: $app.selectedRemoteTabIndex,
+            items: column.tabs,
+            selectedIndex: Binding(
+                get: { column.selectedIndex },
+                set: { column.selectedIndex = $0 }
+            ),
             title: { tab in
                 Text(tab.title)
-                    .font(.system(size: 11.5, weight: tabIndex(tab) == app.selectedRemoteTabIndex ? .semibold : .regular))
+                    .font(.system(size: 11.5, weight: tabIndex(tab) == column.selectedIndex ? .semibold : .regular))
             },
-            accessory: { tab in
-                Circle()
-                    .fill(statusColor(tab.state))
-                    .frame(width: 6, height: 6)
+            accessory: { tab -> AnyView in
+                switch tab {
+                case .local:
+                    return AnyView(
+                        Image(systemName: "folder")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                    )
+                case .remote(let rtab):
+                    return AnyView(
+                        Circle()
+                            .fill(statusColor(rtab.state))
+                            .frame(width: 6, height: 6)
+                    )
+                }
             },
             addLabel: {
-                AddMenuButton(help: "打开新连接") {
-                    if app.hosts.isEmpty {
-                        Button("未发现 ~/.ssh/config 中的主机") {}
-                            .disabled(true)
-                    } else {
+                AddMenuButton(help: "新建标签或打开新连接") {
+                    Button("新建本地标签") {
+                        app.setFocus(to: column)
+                        app.addLocalTab(in: column)
+                    }
+                    if !app.hosts.isEmpty {
+                        Divider()
                         ForEach(app.hosts) { host in
                             Button(host.display) { openOrFocusHost(host) }
                         }
+                    } else {
+                        Divider()
+                        Button("未发现 ~/.ssh/config 中的主机") {}
+                            .disabled(true)
                     }
                 }
                 .popover(item: $duplicateHostPrompt, arrowEdge: .bottom) { host in
@@ -416,17 +411,45 @@ struct RemoteTabBarView: View {
                     )
                 }
             },
-            onClose: { index in app.closeRemoteTab(at: index) },
-            onSelect: { index in app.selectRemoteTab(at: index) }
+            onClose: { index in
+                closeTab(at: index)
+            },
+            onSelect: { index in
+                column.select(index)
+                // tab 切换 → 焦点切到本列
+                app.setFocus(to: column)
+            },
+            draggable: { tab in
+                TabTransferRef(sourceColumnID: column.id, tabID: tab.id)
+            }
         )
+        .dropDestination(for: TabTransferRef.self) { refs, _ in
+            guard let ref = refs.first else { return false }
+            // 来自其它列的 tab 移到本列，同时切焦点
+            app.moveTab(fromSourceColumnID: ref.sourceColumnID, tabID: ref.tabID, to: column)
+            app.setFocus(to: column)
+            return true
+        }
     }
 
-    private func tabIndex(_ tab: RemoteTab) -> Int {
-        app.remoteTabs.firstIndex(where: { $0.id == tab.id }) ?? -1
+    private func tabIndex(_ tab: BrowserTab) -> Int {
+        column.tabs.firstIndex(where: { $0.id == tab.id }) ?? -1
+    }
+
+    private func closeTab(at index: Int) {
+        // 通过 column 自己的 close 方法（其内部会处理 remote tab 的断开）。
+        column.close(at: index, minCount: 1)
+        // 顶栏 picker 跟随当前列剩余的活跃会话。
+        app.setFocus(to: column)
     }
 
     private func openOrFocusHost(_ host: HostEntry) {
-        if app.remoteTabs.contains(where: { $0.host?.id == host.id }) {
+        // 重复检测只看本列：左右两侧可以同时各有一个相同 host 的 tab。
+        let existsInThisColumn = column.tabs.contains { tab in
+            if case .remote(let rtab) = tab, rtab.host?.id == host.id { return true }
+            return false
+        }
+        if existsInThisColumn {
             duplicateHostPrompt = host
         } else {
             createAndConnect(host)
@@ -435,14 +458,21 @@ struct RemoteTabBarView: View {
 
     private func createAndConnect(_ host: HostEntry) {
         duplicateHostPrompt = nil
-        app.addRemoteTab(host: host)
+        // 新建 + 连接：始终建在本列（用户在哪个列点 +，就建到哪个列）。
+        app.setFocus(to: column)
+        app.addRemoteTab(host: host, in: column)
         app.connect()
     }
 
     private func focusFirstInstance(of host: HostEntry) {
         duplicateHostPrompt = nil
-        if let idx = app.remoteTabs.firstIndex(where: { $0.host?.id == host.id }) {
-            app.selectRemoteTab(at: idx)
+        // 在本列内查找匹配项
+        for (idx, tab) in column.tabs.enumerated() {
+            if case .remote(let rtab) = tab, rtab.host?.id == host.id {
+                column.select(idx)
+                app.setFocus(to: column)
+                return
+            }
         }
     }
 

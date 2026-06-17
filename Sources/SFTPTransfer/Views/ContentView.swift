@@ -4,9 +4,15 @@ struct ContentView: View {
     @Environment(AppModel.self) private var app
     /// 底部「传输状态」栏是否由用户展开（记忆到偏好设置）。
     @AppStorage("transfer.statusExpanded") private var statusExpanded = true
+    /// 用户是否已确认"远程中转会经本机临时文件"。
+    @AppStorage("transfer.relayAcknowledged") private var relayAcknowledged = false
     /// 结果提醒 toast（自动淡出）。
     @State private var toast: TransferEngine.Outcome?
     @State private var toastDismiss: Task<Void, Never>?
+    /// 待处理的传输请求（远程中转未确认时暂存）。
+    @State private var pendingRelay: AppModel.TransferSnapshot?
+    @State private var pendingMount: MountRequest?
+    @State private var mountManagerPresented = false
     /// 折叠明细的自然高度（测量得到），折叠动画在 0 ↔ 该高度之间插值。
     @State private var detailHeight: CGFloat = 0
 
@@ -19,13 +25,13 @@ struct ContentView: View {
             topBar
             HSplitView {
                 paneSide(
-                    tabBar: LocalTabBarView(),
-                    pane: app.activeLocalPane
+                    tabBar: ColumnTabBarView(column: app.leftColumn),
+                    pane: app.leftColumn.activePane
                 )
                 .frame(minWidth: 360)
                 paneSide(
-                    tabBar: RemoteTabBarView(),
-                    pane: app.activeRemoteTab?.pane
+                    tabBar: ColumnTabBarView(column: app.rightColumn),
+                    pane: app.rightColumn.activePane
                 )
                 .frame(minWidth: 360)
             }
@@ -63,6 +69,10 @@ struct ContentView: View {
         // 服务器配置
         .sheet(isPresented: $app.serverConfigPresented) {
             ServerConfigView()
+        }
+        // 挂载管理
+        .sheet(isPresented: $mountManagerPresented) {
+            MountManagementView()
         }
         // 未知主机 TOFU 确认
         .alert("未知主机", isPresented: Binding(get: { app.hostKeyPrompt != nil },
@@ -107,48 +117,62 @@ struct ContentView: View {
     private var topBar: some View {
         @Bindable var app = app
         return HStack(spacing: 10) {
-            Text("服务器")
-            Picker("", selection: Binding(
-                get: { app.selectedHostID },
-                set: { app.selectHost($0) }
-            )) {
-                Text("（无）").tag(Optional<HostEntry.ID>.none)
-                ForEach(app.hosts) { host in
-                    Text(host.display).tag(Optional(host.id))
+            // 顶栏的服务器选择下拉框与连接 / 断开按钮跟随焦点会话：
+            // 远程会话聚焦时沿用原行为；本地会话聚焦时显示"本地目录"占位，
+            // 用户选择服务器后，"连接"会在该本地会话的对侧新建远程会话。
+            if app.focusedColumn.activeTab != nil {
+                Text("服务器")
+                Picker("", selection: Binding(
+                    get: { app.selectedHostID },
+                    set: { app.selectHost($0) }
+                )) {
+                    Text(app.isFocusedLocalTab ? "本地目录" : "（无）")
+                        .tag(Optional<HostEntry.ID>.none)
+                    ForEach(app.hosts) { host in
+                        Text(host.display).tag(Optional(host.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 360)
+
+                Button {
+                    app.serverConfigPresented = true
+                } label: {
+                    Label("配置服务器", systemImage: "slider.horizontal.3")
+                }
+                .help("配置服务器")
+
+                if let tab = app.focusedActiveRemoteTab {
+                    if tab.state == .connected {
+                        Button("断开") { app.disconnectFocused() }
+                    } else {
+                        Button(tab.state == .connecting ? "连接中…" : "连接") {
+                            app.connectFocused()
+                        }
+                        .disabled(!app.canConnectFocused)
+                    }
+                    if tab.state == .connecting { ProgressView().controlSize(.small) }
+                } else {
+                    Button("连接") {
+                        app.connectFocused()
+                    }
+                    .disabled(!app.canConnectFocused)
                 }
             }
-            .labelsHidden()
-            .frame(maxWidth: 360)
-
-            Button {
-                app.serverConfigPresented = true
-            } label: {
-                Label("配置服务器", systemImage: "slider.horizontal.3")
-            }
-            .help("配置服务器")
-
-            if let tab = app.activeRemoteTab, tab.state == .connected {
-                Button("断开") { app.disconnect() }
-            } else {
-                Button(app.activeRemoteTab?.state == .connecting ? "连接中…" : "连接") {
-                    app.connect()
-                }
-                .disabled(!app.canConnect)
-            }
-            if app.activeRemoteTab?.state == .connecting { ProgressView().controlSize(.small) }
 
             Spacer()
 
+            // 状态指示也跟随焦点列
             Circle()
-                .fill(statusColor)
+                .fill(focusedStatusColor)
                 .frame(width: 10, height: 10)
-            Text(app.activeRemoteTab?.statusText ?? "未连接")
+            Text(focusedStatusText)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var statusColor: Color {
-        switch app.activeRemoteTab?.state {
+    private var focusedStatusColor: Color {
+        switch app.focusedActiveRemoteTab?.state {
         case .connected:    return .green
         case .connecting:   return .orange
         case .disconnected: return .gray
@@ -156,28 +180,33 @@ struct ContentView: View {
         }
     }
 
+    private var focusedStatusText: String {
+        if let tab = app.focusedActiveRemoteTab {
+            return tab.statusText
+        }
+        return "未连接"
+    }
+
     // MARK: 传输按钮
 
     private var transferButtons: some View {
         HStack {
             Spacer()
+            // "传输到左侧 ←"：把右侧活跃 tab 的选中项传到左侧活跃 tab 的当前目录。
             Button {
-                app.uploadSelection()
+                handleTransferClick(direction: .toLeft)
             } label: {
-                Label("上传选中", systemImage: "arrow.right")
+                Label(app.transferToLeftTitle, systemImage: "arrow.left")
             }
-            .disabled(!app.isActiveRemoteTabConnected
-                      || app.engine.isRunning
-                      || (app.activeLocalPane?.selection.isEmpty ?? true))
+            .disabled(!app.canTransferToLeft || app.engine.isRunning)
 
+            // "传输到右侧 →"：把左侧活跃 tab 的选中项传到右侧活跃 tab 的当前目录。
             Button {
-                app.downloadSelection()
+                handleTransferClick(direction: .toRight)
             } label: {
-                Label("下载选中", systemImage: "arrow.left")
+                Label(app.transferToRightTitle, systemImage: "arrow.right")
             }
-            .disabled(!app.isActiveRemoteTabConnected
-                      || app.engine.isRunning
-                      || (app.activeRemoteTab?.pane.selection.isEmpty ?? true))
+            .disabled(!app.canTransferToRight || app.engine.isRunning)
 
             Button(role: .cancel) {
                 app.cancelTransfer()
@@ -185,7 +214,95 @@ struct ContentView: View {
                 Label("取消", systemImage: "xmark.circle")
             }
             .disabled(!app.engine.isRunning)
+
             Spacer()
+
+            Button {
+                beginMount()
+            } label: {
+                Label("挂载", systemImage: app.mountButtonSystemImage)
+            }
+            .disabled(!app.canMountCurrentPair)
+            .help("将当前远程目录挂载到当前本地空目录")
+
+            Button {
+                app.mountManager.refreshStatuses()
+                mountManagerPresented = true
+            } label: {
+                Label("管理挂载…", systemImage: "externaldrive")
+            }
+        }
+        .confirmationDialog(
+            "远程中转提示",
+            isPresented: Binding(
+                get: { pendingRelay != nil },
+                set: { if !$0 { pendingRelay = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("继续") {
+                relayAcknowledged = true
+                let snapshot = pendingRelay
+                pendingRelay = nil
+                if let snapshot { app.performTransferFromSnapshot(snapshot) }
+            }
+            Button("取消", role: .cancel) { pendingRelay = nil }
+        } message: {
+            Text("本次传输会在两台远程服务器之间通过本机中转，会在硬盘上产生临时文件。\n\n确认后下次传输将不再询问。")
+        }
+        .confirmationDialog(
+            "确认挂载",
+            isPresented: Binding(
+                get: { pendingMount != nil },
+                set: { if !$0 { pendingMount = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingMount
+        ) { request in
+            Button("挂载") {
+                pendingMount = nil
+                app.performMount(request)
+            }
+            Button("取消", role: .cancel) { pendingMount = nil }
+        } message: { request in
+            Text("将把远程目录\n\(request.expectedSource)\n挂载到本地空目录：\n\(request.localPath)\n\n不会删除、移动或覆盖本地目录。若目录不为空或已经是挂载点，操作会被拒绝。")
+        }
+    }
+
+    private enum TransferDirection { case toLeft, toRight }
+
+    /// 处理传输按钮点击：远程中转 + 未确认过 → 弹确认；其余直接执行。
+    private func handleTransferClick(direction: TransferDirection) {
+        let isRelay: Bool
+        let from: PaneColumnModel
+        let to: PaneColumnModel
+        switch direction {
+        case .toLeft:
+            isRelay = app.isTransferToLeftRemoteRelay
+            from = app.rightColumn
+            to = app.leftColumn
+        case .toRight:
+            isRelay = app.isTransferToRightRemoteRelay
+            from = app.leftColumn
+            to = app.rightColumn
+        }
+        if isRelay, !relayAcknowledged {
+            if let snapshot = app.makeTransferSnapshot(from: from, to: to) {
+                pendingRelay = snapshot
+            }
+        } else {
+            switch direction {
+            case .toLeft: app.transferToLeft()
+            case .toRight: app.transferToRight()
+            }
+        }
+    }
+
+    private func beginMount() {
+        do {
+            pendingMount = try app.makeMountRequestForCurrentPair()
+        } catch {
+            app.presentError(error)
         }
     }
 
@@ -248,6 +365,18 @@ struct ContentView: View {
                 }
             }
             ProgressView(value: progressFraction)
+            HStack(spacing: 12) {
+                if app.engine.isRunning, app.engine.bytesPerSecond > 0 {
+                    Text("\(formatSpeed(app.engine.bytesPerSecond))")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer()
+                if app.engine.isRunning, app.engine.etaSeconds > 0 {
+                    Text("剩余 \(formatEta(app.engine.etaSeconds))")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            .font(.caption)
             logView
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,6 +386,27 @@ struct ContentView: View {
         let total = app.engine.currentTotal
         guard total > 0 else { return 0 }
         return min(1, Double(app.engine.currentBytes) / Double(total))
+    }
+
+    private func formatSpeed(_ bps: Double) -> String {
+        let units = ["B/s", "KB/s", "MB/s", "GB/s"]
+        var value = bps
+        var i = 0
+        while value >= 1024, i < units.count - 1 {
+            value /= 1024
+            i += 1
+        }
+        return String(format: i == 0 ? "%.0f %@" : "%.1f %@", value, units[i])
+    }
+
+    private func formatEta(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds) 秒" }
+        let m = seconds / 60
+        let s = seconds % 60
+        if m < 60 { return "\(m) 分 \(s) 秒" }
+        let h = m / 60
+        let mm = m % 60
+        return "\(h) 小时 \(mm) 分"
     }
 
     private var logView: some View {

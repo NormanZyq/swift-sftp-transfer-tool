@@ -34,6 +34,8 @@ final class RemoteTab: Identifiable {
     init(host: HostEntry? = nil) {
         self.host = host
         self.pane = PaneModel(kind: .remote)
+        // 反向引用：让面板能直接判断"自己的远程 tab 是否已连接"
+        self.pane.owningRemoteTab = self
     }
 
     var title: String {

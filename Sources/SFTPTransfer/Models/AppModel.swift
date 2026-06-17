@@ -20,17 +20,15 @@ final class AppModel {
     var serverConfigPresented = false
     private var serverCatalog = StoredServerCatalog()
 
-    // MARK: Tab 集合
-    /// 左侧本地 tab 列表与当前选中。
-    var localTabs: [PaneModel] = []
-    var selectedLocalTabIndex: Int = 0
-
-    /// 右侧远程 tab 列表与当前选中。
-    var remoteTabs: [RemoteTab] = []
-    var selectedRemoteTabIndex: Int = 0
+    // MARK: Tab 容器
+    /// 左侧列：默认放本地 tab，可混合。
+    let leftColumn = PaneColumnModel()
+    /// 右侧列：默认放远程 tab，可混合。
+    let rightColumn = PaneColumnModel()
 
     // MARK: 共享传输引擎
     let engine = TransferEngine()
+    let mountManager = MountManager()
 
     // MARK: 全局弹窗（来自最近一次 connect 流程的中间态）
     var errorMessage: String?
@@ -44,9 +42,11 @@ final class AppModel {
         loadServerCatalog()
         selectedHostID = hosts.first?.id
 
-        // 初始：1 个本地 tab，定位到主目录；1 个空远程 tab（用户随后从 picker 选主机）
+        // 初始：左侧 1 个本地 tab，定位到主目录；右侧 1 个空远程 tab（用户随后从 picker 选主机）
         addLocalTab(initialPath: LocalFileSystem.home)
         addRemoteTab()
+        // 默认焦点 = 右列（顶栏 picker / 连接按钮初始看向右列的远程 tab）
+        focusedColumnID = rightColumn.id
         if let firstHost = hosts.first {
             assignHostToActiveRemoteTab(firstHost)
         }
@@ -174,14 +174,71 @@ final class AppModel {
 
     // MARK: 派生属性
 
+    /// 兼容旧调用点：活跃的「本地 tab」——左侧列的活跃 tab 若是 .local 则返回它。
+    /// 顶栏「传输到另一侧」按钮和拖拽目标都通过这个判断"本地侧"是否就绪。
     var activeLocalPane: PaneModel? {
-        guard localTabs.indices.contains(selectedLocalTabIndex) else { return nil }
-        return localTabs[selectedLocalTabIndex]
+        if case .local(let pane) = leftColumn.activeTab { return pane }
+        return nil
     }
 
+    /// 兼容旧调用点：活跃的「远程 tab」——右侧列的活跃 tab 若是 .remote 则返回它。
+    /// 顶栏 host picker、连接按钮等仍按"右侧活跃远程 tab"工作；后续可扩展为支持两列任一活跃 tab。
     var activeRemoteTab: RemoteTab? {
-        guard remoteTabs.indices.contains(selectedRemoteTabIndex) else { return nil }
-        return remoteTabs[selectedRemoteTabIndex]
+        rightColumn.activeRemoteTab
+    }
+
+    // MARK: 焦点列
+
+    /// 当前 UI 焦点所在的列。Tab 切换、面板点击、+ 按钮等都会更新这个值。
+    /// 顶栏 host picker / 连接按钮据此动态切换。
+    /// 初始默认指向右列（保持传统双栏布局的默认焦点）。
+    private(set) var focusedColumnID: UUID = UUID()
+
+    /// 焦点列实例。`focusedColumnID` 必须与 `leftColumn.id` 或 `rightColumn.id` 之一相等；
+    /// 若启动时占位 UUID 不匹配任一列，回退到右列。
+    var focusedColumn: PaneColumnModel {
+        if leftColumn.id == focusedColumnID { return leftColumn }
+        if rightColumn.id == focusedColumnID { return rightColumn }
+        return rightColumn
+    }
+
+    /// 焦点列活跃的远程 tab。顶栏在远程聚焦时用它保持原有换服务器行为。
+    var focusedActiveRemoteTab: RemoteTab? { focusedColumn.activeRemoteTab }
+
+    /// 焦点列活跃项是否是本地目录。此时顶栏 picker 显示"本地目录"占位；
+    /// 用户选中服务器后，连接按钮会在对侧新建远程会话。
+    var isFocusedLocalTab: Bool {
+        focusedColumn.activeTab?.isLocal == true
+    }
+
+    /// 焦点列的活跃远程 tab 是否已连接。
+    var isFocusedRemoteTabConnected: Bool {
+        focusedActiveRemoteTab?.isConnected == true
+    }
+
+    /// 焦点列是否可发起连接：
+    /// - 远程聚焦：沿用原行为，连接当前远程 tab。
+    /// - 本地聚焦：已在 picker 中选中服务器时，在对侧新建远程 tab 并连接。
+    var canConnectFocused: Bool {
+        if let tab = focusedActiveRemoteTab {
+            guard tab.host != nil else { return false }
+            return tab.state == .disconnected
+        }
+        if isFocusedLocalTab, let selectedHostID {
+            return hosts.contains { $0.id == selectedHostID }
+        }
+        return false
+    }
+
+    /// 视图层调用：把焦点切到某列。Tab 选中、面板点击、+ 按钮等都通过这里改焦点。
+    func setFocus(to column: PaneColumnModel) {
+        focusedColumnID = column.id
+        // 同步顶栏 picker：远程焦点显示对应 host；本地焦点回到"本地目录"占位。
+        if let active = focusedActiveRemoteTab {
+            selectedHostID = active.host?.id
+        } else if isFocusedLocalTab {
+            selectedHostID = nil
+        }
     }
 
     /// 当前活跃远程 tab 是否已连接。多 tab 模式下，远程面板的可用性、传输的"目标 session"
@@ -190,19 +247,28 @@ final class AppModel {
         activeRemoteTab?.isConnected == true
     }
 
+    /// 遍历所有列中存在的远程 tab（用于 session 反查）。包含左侧 / 右侧两列。
+    /// 同名 `allRemoteTabsList`（方法）也提供等价能力；这里保留属性以兼容旧调用点。
+    private var allRemoteTabs: [RemoteTab] {
+        (leftColumn.tabs + rightColumn.tabs).compactMap { $0.remoteTab }
+    }
+
     /// 兼容旧调用点：picker 是否能发起连接 = 活跃远程 tab 存在且未在连接中。
     var canConnect: Bool {
         guard let tab = activeRemoteTab, tab.host != nil else { return false }
         return tab.state == .disconnected
     }
 
-    /// 顶栏 host picker 只替换当前远程 tab 的主机，不跨 tab 查找或切换。
-    /// 若当前 tab 已有连接，则先断开旧会话，再自动连接到新选中的主机。
+    /// 顶栏 host picker：
+    /// - 远程聚焦时只替换焦点列活跃远程 tab 的主机，不跨列 / 跨 tab 查找或切换。
+    /// - 本地聚焦时只记录待连接主机，等用户点"连接"再在对侧新建远程 tab。
+    /// 若该 tab 已有连接，则先断开旧会话，再自动连接到新选中的主机。
     func selectHost(_ id: HostEntry.ID?) {
         selectedHostID = id
+        guard !isFocusedLocalTab else { return }
         guard let id,
               let host = hosts.first(where: { $0.id == id }),
-              let tab = activeRemoteTab,
+              let tab = focusedActiveRemoteTab,
               tab.host?.id != host.id else { return }
 
         if tab.state == .disconnected {
@@ -214,36 +280,61 @@ final class AppModel {
 
     // MARK: Tab 管理
 
-    /// 新建本地 tab。`path` 缺省 = 主目录。
+    /// 兼容旧调用点：左侧列里的本地 tab 列表。
+    var localTabs: [PaneModel] {
+        leftColumn.tabs.compactMap { tab -> PaneModel? in
+            if case .local(let pane) = tab { return pane }
+            return nil
+        }
+    }
+    var selectedLocalTabIndex: Int {
+        get { leftColumn.selectedIndex }
+        set { leftColumn.selectedIndex = newValue }
+    }
+
+    /// 兼容旧调用点：右侧列里的远程 tab 列表。
+    var remoteTabs: [RemoteTab] {
+        rightColumn.tabs.compactMap { $0.remoteTab }
+    }
+    var selectedRemoteTabIndex: Int {
+        get { rightColumn.selectedIndex }
+        set { rightColumn.selectedIndex = newValue }
+    }
+
+    /// 新建本地 tab（默认追加到左侧列）。`path` 缺省 = 主目录。
     @discardableResult
-    func addLocalTab(initialPath path: String = LocalFileSystem.home) -> PaneModel {
+    func addLocalTab(initialPath path: String = LocalFileSystem.home, in column: PaneColumnModel? = nil) -> PaneModel {
         let pane = PaneModel(kind: .local)
         pane.app = self
         pane.seedHistory(path)
-        localTabs.append(pane)
-        selectedLocalTabIndex = localTabs.count - 1
+        (column ?? leftColumn).append(.local(pane))
         Task { await pane.reload() }
         return pane
     }
 
-    /// 关闭一个本地 tab。index 越界或只剩一个时不关闭。
+    /// 关闭一个本地 tab。index 越界或只剩一个本地 tab 时不关闭。
     func closeLocalTab(at index: Int) {
-        guard localTabs.count > 1, localTabs.indices.contains(index) else { return }
-        localTabs.remove(at: index)
-        if selectedLocalTabIndex >= localTabs.count {
-            selectedLocalTabIndex = localTabs.count - 1
+        // 找到左侧列中第 N 个 .local tab 的实际列索引
+        var n = 0
+        for (colIdx, tab) in leftColumn.tabs.enumerated() {
+            if case .local = tab {
+                if n == index {
+                    leftColumn.close(at: colIdx, minCount: leftColumn.tabs.count - 1)
+                    return
+                }
+                n += 1
+            }
         }
     }
 
-    /// 新建远程 tab。`host` 可为 nil。
+    /// 新建远程 tab（默认追加到右侧列）。`host` 可为 nil。
     @discardableResult
-    func addRemoteTab(host: HostEntry? = nil) -> RemoteTab {
+    func addRemoteTab(host: HostEntry? = nil, in column: PaneColumnModel? = nil) -> RemoteTab {
         let tab = RemoteTab(host: host)
         tab.appRef = self
         tab.pane.app = self
         tab.pane.remoteSession = tab.session
-        remoteTabs.append(tab)
-        selectedRemoteTabIndex = remoteTabs.count - 1
+        (column ?? rightColumn).append(.remote(tab))
         if let host {
             tab.pane.remoteTitle = "\(host.user)@\(host.alias)"
             selectedHostID = host.id
@@ -251,16 +342,19 @@ final class AppModel {
         return tab
     }
 
-    /// 关闭一个远程 tab。若已连接则先断开。
+    /// 关闭右侧列里第 N 个远程 tab。
     func closeRemoteTab(at index: Int) {
-        guard remoteTabs.indices.contains(index) else { return }
-        let tab = remoteTabs[index]
-        tab.disconnectIfNeeded()
-        remoteTabs.remove(at: index)
-        if selectedRemoteTabIndex >= remoteTabs.count {
-            selectedRemoteTabIndex = max(0, remoteTabs.count - 1)
+        var n = 0
+        for (colIdx, tab) in rightColumn.tabs.enumerated() {
+            if case .remote = tab {
+                if n == index {
+                    rightColumn.close(at: colIdx)
+                    break
+                }
+                n += 1
+            }
         }
-        // 同步顶栏 picker：让 picker 反映新活跃 tab 的 host（或无）。
+        // 同步顶栏 picker
         if let active = activeRemoteTab {
             selectedHostID = active.host?.id
         } else {
@@ -268,16 +362,97 @@ final class AppModel {
         }
     }
 
-    /// 选中远程 tab：刷新其面板的 remoteTitle 以反映当前活跃状态，并同步顶栏 picker。
-    func selectRemoteTab(at index: Int) {
-        guard remoteTabs.indices.contains(index) else { return }
-        selectedRemoteTabIndex = index
-        let tab = remoteTabs[index]
-        if let host = tab.host {
-            tab.pane.remoteTitle = "\(host.user)@\(host.alias)"
-            selectedHostID = host.id
+    // MARK: 跨列 tab 移动
+
+    /// 把一个 tab 从源列移到目标列。
+    /// - 源列找不到对应 tab / 源列 = 目标列 → no-op。
+    /// - 远程 tab 的 SFTPSession 是 actor 引用，actor 本身不随列销毁，所以不需要重连。
+    /// - 移动到空列时把 moved tab 设为新活跃；其它情况沿用目标列原 selectedIndex。
+    func moveTab(fromSourceColumnID sourceID: UUID, tabID: UUID, to destColumn: PaneColumnModel) {
+        guard let source = column(for: sourceID), source.id != destColumn.id else { return }
+        guard let tab = source.take(tabID: tabID) else { return }
+        destColumn.tabs.append(tab)
+        // 让移过来的 tab 成为目标列的活跃项
+        if let newIdx = destColumn.tabs.firstIndex(where: { $0.id == tabID }) {
+            destColumn.selectedIndex = newIdx
+        }
+        // 同步顶栏 picker：目标列的活跃远程 tab 决定
+        if let active = activeRemoteTab {
+            selectedHostID = active.host?.id
         } else {
             selectedHostID = nil
+        }
+    }
+
+    /// 给定列 id 找到对应 PaneColumnModel。找不到返回 nil。
+    func column(for id: UUID) -> PaneColumnModel? {
+        if leftColumn.id == id { return leftColumn }
+        if rightColumn.id == id { return rightColumn }
+        return nil
+    }
+
+    /// 给定 PaneModel 找它所属的列（按引用相等比较）。找不到返回 nil。
+    func column(forPane pane: PaneModel) -> PaneColumnModel? {
+        for tab in leftColumn.tabs where tab.pane === pane { return leftColumn }
+        for tab in rightColumn.tabs where tab.pane === pane { return rightColumn }
+        return nil
+    }
+
+    /// 给定远程 PaneModel 找它所属的 RemoteTab。统一左右列后，不能再假定远程只在右侧。
+    func remoteTab(forPane pane: PaneModel) -> RemoteTab? {
+        allRemoteTabsList.first { $0.pane === pane }
+    }
+
+    /// 给定面板找它的对侧活跃 tab。
+    func oppositeActiveTab(forPane pane: PaneModel) -> BrowserTab? {
+        if let column = column(forPane: pane) {
+            return column.id == leftColumn.id ? rightColumn.activeTab : leftColumn.activeTab
+        }
+        return nil
+    }
+
+    func canTransferFromPaneToOpposite(_ pane: PaneModel) -> Bool {
+        guard let source = column(forPane: pane) else { return false }
+        let destination = source.id == leftColumn.id ? rightColumn : leftColumn
+        return canTransfer(from: source, to: destination)
+    }
+
+    func canUploadDownloadFromPaneToOpposite(_ pane: PaneModel) -> Bool {
+        guard let source = column(forPane: pane),
+              let sourceTab = source.activeTab,
+              sourceTab.pane === pane else { return false }
+        let destination = source.id == leftColumn.id ? rightColumn : leftColumn
+        guard let destTab = destination.activeTab else { return false }
+        guard sourceTab.isRemote != destTab.isRemote else { return false }
+        return canTransfer(from: source, to: destination)
+    }
+
+    func transferFromPaneToOpposite(_ pane: PaneModel) {
+        guard let source = column(forPane: pane) else { return }
+        let destination = source.id == leftColumn.id ? rightColumn : leftColumn
+        performOrSnapshot(from: source, to: destination)
+    }
+
+    /// 选中右侧列中第 N 个远程 tab。
+    func selectRemoteTab(at index: Int) {
+        var n = 0
+        for (colIdx, tab) in rightColumn.tabs.enumerated() {
+            if case .remote = tab {
+                if n == index {
+                    rightColumn.select(colIdx)
+                    let tab = rightColumn.tabs[colIdx]
+                    if case .remote(let rtab) = tab {
+                        if let host = rtab.host {
+                            rtab.pane.remoteTitle = "\(host.user)@\(host.alias)"
+                            selectedHostID = host.id
+                        } else {
+                            selectedHostID = nil
+                        }
+                    }
+                    return
+                }
+                n += 1
+            }
         }
     }
 
@@ -312,12 +487,43 @@ final class AppModel {
 
     // MARK: 连接 / 断开
 
-    /// 连接当前活跃远程 tab。`passphrase` 用于带口令私钥的二次输入。
+    /// 连接焦点列的活跃远程 tab。`passphrase` 用于带口令私钥的二次输入。
+    /// 旧 `connect(passphrase:)` 内部仍然走这个；保留旧入口以兼容老代码 / 菜单快捷键。
     func connect(passphrase: String? = nil) {
-        guard let tab = activeRemoteTab, let host = tab.host, tab.state == .disconnected else { return }
+        connectFocused(passphrase: passphrase)
+    }
+
+    /// 连接焦点列的活跃远程 tab。顶栏"连接"按钮 / 菜单命令都走这里。
+    func connectFocused(passphrase: String? = nil) {
+        if focusedActiveRemoteTab == nil, isFocusedLocalTab {
+            connectSelectedHostOppositeFocusedLocal(passphrase: passphrase)
+            return
+        }
+
+        guard let tab = focusedActiveRemoteTab, let host = tab.host, tab.state == .disconnected else { return }
         tab.state = .connecting
         tab.statusText = "连接中 \(host.alias)…"
 
+        Task { [weak self] in
+            await self?.runConnect(tab: tab, host: host, passphrase: passphrase)
+        }
+    }
+
+    /// 本地目录获得焦点时，顶栏连接会在该本地会话的对侧直接创建远程 tab。
+    /// 这里故意不走 tab 栏的重复主机检测：用户从本地目录发起连接时，每次都是一个新会话。
+    private func connectSelectedHostOppositeFocusedLocal(passphrase: String?) {
+        guard let sourceTab = focusedColumn.activeTab,
+              sourceTab.isLocal,
+              let selectedHostID,
+              let host = hosts.first(where: { $0.id == selectedHostID }) else { return }
+
+        let destinationColumn = focusedColumn.id == leftColumn.id ? rightColumn : leftColumn
+        let tab = addRemoteTab(host: host, in: destinationColumn)
+        setFocus(to: destinationColumn)
+
+        guard tab.state == .disconnected else { return }
+        tab.state = .connecting
+        tab.statusText = "连接中 \(host.alias)…"
         Task { [weak self] in
             await self?.runConnect(tab: tab, host: host, passphrase: passphrase)
         }
@@ -331,7 +537,7 @@ final class AppModel {
     }
 
     func confirmUnknownHost() {
-        guard let prompt = hostKeyPrompt, let tab = activeRemoteTab, tab.host != nil else { return }
+        guard let prompt = hostKeyPrompt, let tab = focusedActiveRemoteTab, tab.host != nil else { return }
         hostKeyPrompt = nil
         KnownHosts.append(host: prompt.info.host, port: prompt.info.port, openSSHLine: prompt.info.openSSHLine)
         engine.appendLog("已将 \(prompt.info.host) 写入 known_hosts")
@@ -340,8 +546,8 @@ final class AppModel {
 
     func cancelUnknownHost() {
         hostKeyPrompt = nil
-        activeRemoteTab?.state = .disconnected
-        activeRemoteTab?.statusText = "未连接"
+        focusedActiveRemoteTab?.state = .disconnected
+        focusedActiveRemoteTab?.statusText = "未连接"
     }
 
     /// 真正跑 connect 的私有方法：被 `connect` 触发，因 pass prompt / 未知主机可能要重入。
@@ -424,9 +630,12 @@ final class AppModel {
         pane.searchResults = nil
     }
 
-    /// 断开当前活跃远程 tab。
-    func disconnect() {
-        guard let tab = activeRemoteTab else { return }
+    /// 断开当前活跃远程 tab。旧入口；保留以兼容旧调用点。新代码请用 `disconnectFocused()`。
+    func disconnect() { disconnectFocused() }
+
+    /// 断开焦点列的活跃远程 tab。顶栏"断开"按钮走这里。
+    func disconnectFocused() {
+        guard let tab = focusedActiveRemoteTab else { return }
         tab.disconnectIfNeeded()
         engine.appendLog("已断开连接")
     }
@@ -437,7 +646,7 @@ final class AppModel {
                                       action: String,
                                       showAlert: Bool = true) -> Bool {
         if SFTPSession.isConnectionLost(error),
-           let tab = remoteTabs.first(where: { $0.pane === pane }) {
+           let tab = remoteTab(forPane: pane) {
             markConnectionLost(tab, action: action, showAlert: showAlert)
             return true
         }
@@ -469,106 +678,342 @@ final class AppModel {
         engine.appendLog("✗ \(error.localizedDescription)")
     }
 
+    func presentError(_ error: Error) {
+        fail(error)
+    }
+
     // MARK: 传输
 
-    /// 上传：本地活跃 tab 的选中 → 远程活跃 tab 的当前目录。
-    func uploadSelection() {
-        guard let localPane = activeLocalPane,
-              isActiveRemoteTabConnected,
-              let tab = activeRemoteTab,
-              !engine.isRunning else { return }
-        let targets = localPane.selectedItems
-        guard !targets.isEmpty else { return }
-        let remoteDir = tab.pane.currentPath
-        let requests = targets.map { item in
-            TransferEngine.Request(
-                direction: .upload,
-                srcPath: item.path,
-                dstPath: SFTPSession.join(remoteDir, item.name),
-                isDirectory: item.isDirectory
-            )
+    // MARK: 挂载
+
+    private enum MountPairDirection {
+        case remoteToLeft
+        case remoteToRight
+    }
+
+    private var currentMountPair: (remote: RemoteTab, local: PaneModel, direction: MountPairDirection)? {
+        guard let left = leftColumn.activeTab, let right = rightColumn.activeTab else { return nil }
+        if left.isLocal, let remote = right.remoteTab, remote.isConnected, remote.host != nil {
+            return (remote, left.pane, .remoteToLeft)
         }
-        transferTask = Task { [weak self, engine, tab] in
-            let result = await engine.run(requests, session: tab.session)
-            if result.connectionLost {
-                self?.markConnectionLost(tab, action: "上传")
-            } else {
-                await tab.pane.reload()
+        if right.isLocal, let remote = left.remoteTab, remote.isConnected, remote.host != nil {
+            return (remote, right.pane, .remoteToRight)
+        }
+        return nil
+    }
+
+    var canMountCurrentPair: Bool {
+        currentMountPair != nil && !mountManager.isMounting
+    }
+
+    var mountButtonSystemImage: String {
+        switch currentMountPair?.direction {
+        case .remoteToRight:
+            return "arrow.right.circle"
+        case .remoteToLeft:
+            return "arrow.left.circle"
+        case .none:
+            return "arrow.left.arrow.right.circle"
+        }
+    }
+
+    func makeMountRequestForCurrentPair() throws -> MountRequest {
+        guard let pair = currentMountPair, let host = pair.remote.host else {
+            throw MountError.commandFailed("当前左右会话需要一边是已连接远程目录，另一边是本地目录，才能挂载。")
+        }
+        return try mountManager.makeRequest(
+            host: host,
+            remotePath: pair.remote.pane.currentPath,
+            localPath: pair.local.currentPath
+        )
+    }
+
+    func performMount(_ request: MountRequest) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await mountManager.mount(request)
+                engine.appendLog("✓ 已挂载 \(request.expectedSource) → \(request.localPath)")
+                if let pane = [leftColumn.activePane, rightColumn.activePane].compactMap({ $0 }).first(where: { $0.currentPath == request.localPath }) {
+                    await pane.reload()
+                }
+            } catch {
+                fail(error)
             }
         }
+    }
+
+    // MARK: 通用「传输到另一侧」
+
+    // MARK: 通用「传输到另一侧」
+
+    /// "传输到右侧"按钮可用性：左侧活跃 tab 有选中项 & 右侧活跃 tab 可接收。
+    var canTransferToRight: Bool {
+        canTransfer(from: leftColumn, to: rightColumn)
+    }
+
+    /// "传输到左侧"按钮可用性：右侧活跃 tab 有选中项 & 左侧活跃 tab 可接收。
+    var canTransferToLeft: Bool {
+        canTransfer(from: rightColumn, to: leftColumn)
+    }
+
+    /// 通用方向判断：源列有选中项 & 目标列的活跃面板可接收（远程已连接 / 本地始终 OK）。
+    private func canTransfer(from src: PaneColumnModel, to dest: PaneColumnModel) -> Bool {
+        guard let srcTab = src.activeTab, !srcTab.pane.selection.isEmpty else { return false }
+        guard let destTab = dest.activeTab else { return false }
+        if destTab.isRemote, destTab.owningRemoteTab?.isConnected != true {
+            return false
+        }
+        return true
+    }
+
+    /// "传输到右侧"是否为 远程 → 远程（需要本机中转）。仅在按钮可点击时才有意义。
+    var isTransferToRightRemoteRelay: Bool {
+        isRelay(from: leftColumn, to: rightColumn)
+    }
+
+    /// "传输到左侧"是否为 远程 → 远程（需要本机中转）。
+    var isTransferToLeftRemoteRelay: Bool {
+        isRelay(from: rightColumn, to: leftColumn)
+    }
+
+    private func isRelay(from src: PaneColumnModel, to dest: PaneColumnModel) -> Bool {
+        guard let srcTab = src.activeTab, let destTab = dest.activeTab else { return false }
+        return srcTab.isRemote && destTab.isRemote
+    }
+
+    /// "传输到右侧"按钮的源/目标端点对应文字。
+    var transferToRightTitle: String {
+        titleForTransfer(from: leftColumn, to: rightColumn)
+    }
+    /// "传输到左侧"按钮的源/目标端点对应文字。
+    var transferToLeftTitle: String {
+        titleForTransfer(from: rightColumn, to: leftColumn)
+    }
+
+    private func titleForTransfer(from src: PaneColumnModel, to dest: PaneColumnModel) -> String {
+        guard let srcTab = src.activeTab, let destTab = dest.activeTab else { return "传输" }
+        return Self.titleForTransfer(source: srcTab, destination: destTab)
+    }
+
+    /// 把当前两侧活跃 tab 的传输意图快照化：用于"远程中转确认"对话框中暂存请求。
+    /// 视图层不直接构造 TransferRequest，所以这里封装。
+    struct TransferSnapshot: Sendable {
+        let requests: [TransferRequest]
+        let sourcePane: PaneModel
+        let destinationPane: PaneModel
+        let actionLabel: String
+        let involvedRemoteTabIDs: Set<RemoteTab.ID>
+    }
+
+    /// 把 from → to 方向的传输构造成快照。
+    @discardableResult
+    func makeTransferSnapshot(from: PaneColumnModel, to: PaneColumnModel) -> TransferSnapshot? {
+        guard !engine.isRunning,
+              let srcTab = from.activeTab,
+              let destTab = to.activeTab else { return nil }
+        let srcItems = srcTab.pane.selectedItems
+        guard !srcItems.isEmpty else { return nil }
+        let destDir = destTab.pane.currentPath
+        let srcEndpoint = srcTab.kindEndpoint
+        let destEndpoint = destTab.kindEndpoint
+        let requests: [TransferRequest] = srcItems.map { item in
+            TransferRequest(
+                source: TransferItem(endpoint: srcEndpoint, path: item.path, name: item.name, isDirectory: item.isDirectory),
+                destination: destEndpoint,
+                destinationDirectory: destDir
+            )
+        }
+        return TransferSnapshot(
+            requests: requests,
+            sourcePane: srcTab.pane,
+            destinationPane: destTab.pane,
+            actionLabel: Self.titleForTransfer(source: srcTab, destination: destTab),
+            involvedRemoteTabIDs: collectRemoteTabIDs(in: [srcTab, destTab])
+        )
+    }
+
+    /// 由"传输"按钮或"远程中转确认"对话框调用：按快照执行。
+    func performTransferFromSnapshot(_ snapshot: TransferSnapshot) {
+        guard !engine.isRunning else { return }
+        transferTask = Task { [weak self, engine] in
+            guard let self else { return }
+            let result = await engine.run(snapshot.requests) { [weak self] tabID in
+                self?.sessionResolver(for: tabID)
+            }
+            if result.connectionLost {
+                for tabID in snapshot.involvedRemoteTabIDs {
+                    if let tab = self.allRemoteTabsList.first(where: { $0.id == tabID }) {
+                        self.markConnectionLost(tab, action: snapshot.actionLabel)
+                    }
+                }
+            }
+            await snapshot.sourcePane.reload()
+            await snapshot.destinationPane.reload()
+        }
+    }
+
+    // MARK: 传输 - 旧入口（保留为 API；新代码用 transferToLeft/transferToRight）
+
+    /// 上传：本地活跃 tab 的选中 → 远程活跃 tab 的当前目录。
+    /// 等价于 `transferToRight()`，但要求源是 .local、目标 .remote。
+    func uploadSelection() {
+        guard leftColumn.activeTab?.isLocal == true,
+              rightColumn.activeTab?.isRemote == true else { return }
+        transferToRight()
     }
 
     /// 下载：远程活跃 tab 的选中 → 本地活跃 tab 的当前目录。
+    /// 等价于 `transferToLeft()`，但要求源是 .remote、目标 .local。
     func downloadSelection() {
-        guard let localPane = activeLocalPane,
-              isActiveRemoteTabConnected,
-              let tab = activeRemoteTab,
-              !engine.isRunning else { return }
-        let targets = tab.pane.selectedItems
-        guard !targets.isEmpty else { return }
-        let localDir = localPane.currentPath
-        let requests = targets.map { item in
-            TransferEngine.Request(
-                direction: .download,
-                srcPath: item.path,
-                dstPath: (localDir as NSString).appendingPathComponent(item.name),
-                isDirectory: item.isDirectory
-            )
-        }
-        transferTask = Task { [weak self, engine, tab, localPane] in
-            let result = await engine.run(requests, session: tab.session)
-            if result.connectionLost {
-                self?.markConnectionLost(tab, action: "下载")
-            }
-            await localPane.reload()
+        guard rightColumn.activeTab?.isRemote == true,
+              leftColumn.activeTab?.isLocal == true else { return }
+        transferToLeft()
+    }
+
+    // MARK: 方向化传输
+
+    /// "传输到右侧"：把左侧活跃 tab 的选中 → 右侧活跃 tab 的当前目录。
+    /// 视图层应先调用 `canTransferToRight` 检查；远程 → 远程 时需要先经"远程中转确认"对话框
+    /// （`makeTransferSnapshot` + `performTransferFromSnapshot`）。
+    func transferToRight() {
+        performOrSnapshot(from: leftColumn, to: rightColumn)
+    }
+
+    /// "传输到左侧"：把右侧活跃 tab 的选中 → 左侧活跃 tab 的当前目录。
+    func transferToLeft() {
+        performOrSnapshot(from: rightColumn, to: leftColumn)
+    }
+
+    /// 如果远程中转未确认 → 视图层应当先弹确认对话框（参见 ContentView.handleTransferClick）。
+    /// 这里假定"已确认"或"非中转"时直接执行。
+    private func performOrSnapshot(from src: PaneColumnModel, to dest: PaneColumnModel) {
+        guard !engine.isRunning, let snapshot = makeTransferSnapshot(from: src, to: dest) else { return }
+        performTransferFromSnapshot(snapshot)
+    }
+
+    // MARK: 辅助
+
+    private func collectRemoteTabIDs(in tabs: [BrowserTab]) -> Set<RemoteTab.ID> {
+        Set(tabs.compactMap { $0.remoteTab?.id })
+    }
+
+    /// 所有列中的远程 tab 列表（用于断线时反查 session）。
+    private var allRemoteTabsList: [RemoteTab] {
+        (leftColumn.tabs + rightColumn.tabs).compactMap { $0.remoteTab }
+    }
+
+    private static func titleForTransfer(source: BrowserTab, destination: BrowserTab) -> String {
+        switch (source.isRemote, destination.isRemote) {
+        case (false, true): return "上传选中"
+        case (true, false): return "下载选中"
+        case (false, false): return "本地复制"
+        case (true, true):  return "远程中转"
         }
     }
 
-    /// 拖拽：本地路径 → 远程 tab 的目录（上传）。
-    func dropLocalPaths(_ localPaths: [String], toRemoteDir remoteDir: String) {
-        guard isActiveRemoteTabConnected,
-              let tab = activeRemoteTab,
-              !engine.isRunning else { return }
-        let requests = localPaths.map { path -> TransferEngine.Request in
-            TransferEngine.Request(
-                direction: .upload,
-                srcPath: path,
-                dstPath: SFTPSession.join(remoteDir, (path as NSString).lastPathComponent),
-                isDirectory: LocalFileSystem.isDirectory(path)
-            )
-        }
-        transferTask = Task { [weak self, engine, tab] in
-            let result = await engine.run(requests, session: tab.session)
-            if result.connectionLost {
-                self?.markConnectionLost(tab, action: "上传")
-            } else {
-                await tab.pane.reload()
-            }
+    private static func iconForTransfer(source: BrowserTab, destination: BrowserTab) -> String {
+        switch (source.isRemote, destination.isRemote) {
+        case (false, true): return "arrow.right"
+        case (true, false): return "arrow.left"
+        case (false, false): return "doc.on.doc"
+        case (true, true):  return "arrow.triangle.swap"
         }
     }
 
-    /// 拖拽：远程条目 → 本地 tab 的目录（下载）。
-    func dropRemoteItems(_ refs: [RemoteItemRef], toLocalDir localDir: String) {
-        guard isActiveRemoteTabConnected,
-              let tab = activeRemoteTab,
-              !engine.isRunning else { return }
-        guard !refs.isEmpty else { return }
-        let requests = refs.map { ref in
-            TransferEngine.Request(
-                direction: .download,
-                srcPath: ref.path,
-                dstPath: (localDir as NSString).appendingPathComponent(ref.name),
-                isDirectory: ref.isDirectory
-            )
+    // MARK: -
+
+    /// 远程 session 解析器：给定 tab id 返回对应 SFTPSession。
+    /// 由 TransferEngine 在需要远程 I/O 时回调；引擎不持有任何 session。
+    private func sessionResolver(for tabID: RemoteTab.ID) -> SFTPSession? {
+        (leftColumn.tabs + rightColumn.tabs)
+            .compactMap { $0.remoteTab }
+            .first(where: { $0.id == tabID })?.session
+    }
+
+    /// 拖拽统一入口：把一组 `TransferItemRef` 投到目标面板 `destinationPane` 的当前目录。
+    /// 源端可以是本地或远程；目标端由目标面板的 `kind` 决定（与「左/右」解耦）。
+    /// - 同侧拖拽（如本地 → 本地）也走这里，传参会自然形成 local→local 请求。
+    /// - 远程源端会按 ref 的 `tabID` 反查 SFTPSession；tab 已关闭时跳过并提示。
+    func dropTransferItems(_ refs: [TransferItemRef], into destinationPane: PaneModel) {
+        guard !engine.isRunning, !refs.isEmpty else { return }
+        let destDir = destinationPane.currentPath
+        let destEndpoint: TransferEndpoint
+        let targetTab: RemoteTab?
+        switch destinationPane.kind {
+        case .local:
+            destEndpoint = .local
+            targetTab = nil
+        case .remote:
+            // 只允许投到该面板实际所属的已连接远程 tab。
+            guard let tab = remoteTab(forPane: destinationPane), tab.isConnected else { return }
+            destEndpoint = .remote(tabID: tab.id, hostID: tab.host?.id)
+            targetTab = tab
         }
-        transferTask = Task { [weak self, engine, tab] in
-            let result = await engine.run(requests, session: tab.session)
-            if result.connectionLost {
-                self?.markConnectionLost(tab, action: "下载")
+
+        var requests: [TransferRequest] = []
+        for ref in refs {
+            let srcEndpoint = ref.sourceEndpoint
+            // 校验远程源端：tab 必须仍存在
+            if case .remote(let tabID, _) = srcEndpoint,
+               (leftColumn.tabs + rightColumn.tabs).compactMap({ $0.remoteTab })
+                .first(where: { $0.id == tabID }) == nil {
+                engine.appendLog("✗ 跳过 \(ref.name)：来源远程 tab 已关闭")
+                continue
             }
-            if let localPane = self?.activeLocalPane { await localPane.reload() }
+            // 校验远程目标端：必须已连接
+            if case .remote = destEndpoint, targetTab?.isConnected != true { return }
+            requests.append(TransferRequest(
+                source: TransferItem(endpoint: srcEndpoint, path: ref.path, name: ref.name, isDirectory: ref.isDirectory),
+                destination: destEndpoint,
+                destinationDirectory: destDir
+            ))
+        }
+        guard !requests.isEmpty else { return }
+        // 涉及的远程 tab（用于连接断开后回填状态 / 决定刷新哪个面板）
+        let involvedRemoteTabIDs = Set(refs.compactMap { ref -> RemoteTab.ID? in
+            if case .remote(let tabID, _, _, _) = ref { return tabID }
+            return nil
+        })
+        let actionLabel = describeTransferAction(refs: refs, dest: destEndpoint)
+        transferTask = Task { [weak self, engine] in
+            guard let self else { return }
+            let result = await engine.run(requests) { [weak self] tabID in
+                self?.sessionResolver(for: tabID)
+            }
+            if result.connectionLost, let tab = targetTab {
+                self.markConnectionLost(tab, action: actionLabel)
+            }
+            // 刷新源端面板：远程 ref 所属 tab 的 pane
+            for tabID in involvedRemoteTabIDs {
+                if let t = self.allRemoteTabsList.first(where: { $0.id == tabID }) {
+                    await t.pane.reload()
+                }
+            }
+            // 刷新目标面板
+            await destinationPane.reload()
         }
     }
+
+    /// 生成"上传/下载/中转"的友好日志前缀。
+    private func describeTransferAction(refs: [TransferItemRef], dest: TransferEndpoint) -> String {
+        let hasRemote = refs.contains { if case .remote = $0 { return true } else { return false } }
+        let hasLocal = refs.contains { if case .local = $0 { return true } else { return false } }
+        switch (hasRemote, hasLocal, dest) {
+        case (true, false, .local): return "下载"
+        case (false, true, .remote): return "上传"
+        case (true, false, .remote): return "远程中转"
+        case (false, true, .local): return "本地复制"
+        case (true, true, _): return "传输"
+        case (false, false, _): return "传输"
+        }
+    }
+
+    // MARK: 传输请求构造
+
+    // 注：旧的 makeLocalToRemoteRequests / makeRemoteToLocalRequests / runTransfer 已被
+    // transferToOtherSide 取代；transferToOtherSide 直接在活跃 tab 上构造 TransferRequest，
+    // 既支持四种端点组合，也避免重复代码。
 
     /// 取消进行中的传输（协作式：在文件之间或分块循环中尽快停止）。
     func cancelTransfer() {
