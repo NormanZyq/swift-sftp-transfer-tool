@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @Environment(AppModel.self) private var app
@@ -12,6 +13,7 @@ struct ContentView: View {
     /// 待处理的传输请求（远程中转未确认时暂存）。
     @State private var pendingRelay: AppModel.TransferSnapshot?
     @State private var pendingMount: MountRequest?
+    @State private var missingMountDependency: MountDependencyStatus?
     @State private var mountManagerPresented = false
     /// 折叠明细的自然高度（测量得到），折叠动画在 0 ↔ 该高度之间插值。
     @State private var detailHeight: CGFloat = 0
@@ -73,6 +75,19 @@ struct ContentView: View {
         // 挂载管理
         .sheet(isPresented: $mountManagerPresented) {
             MountManagementView()
+        }
+        // 挂载依赖缺失提示
+        .alert("无法开启挂载功能", isPresented: Binding(
+            get: { missingMountDependency != nil },
+            set: { if !$0 { missingMountDependency = nil } }
+        ), presenting: missingMountDependency) { _ in
+            Button("查看安装说明") {
+                openMountDependencyGuide()
+                missingMountDependency = nil
+            }
+            Button("好", role: .cancel) { missingMountDependency = nil }
+        } message: { dependency in
+            Text("\(dependency.message)\n\n安装说明目前在 README 中预留，后续会补充完整步骤。")
         }
         // 未知主机 TOFU 确认
         .alert("未知主机", isPresented: Binding(get: { app.hostKeyPrompt != nil },
@@ -226,8 +241,7 @@ struct ContentView: View {
             .help("将当前远程目录挂载到当前本地空目录")
 
             Button {
-                app.mountManager.refreshStatuses()
-                mountManagerPresented = true
+                openMountManager()
             } label: {
                 Label("管理挂载…", systemImage: "externaldrive")
             }
@@ -299,11 +313,32 @@ struct ContentView: View {
     }
 
     private func beginMount() {
+        guard ensureMountDependenciesAvailable() else { return }
         do {
             pendingMount = try app.makeMountRequestForCurrentPair()
         } catch {
             app.presentError(error)
         }
+    }
+
+    private func openMountManager() {
+        guard ensureMountDependenciesAvailable() else { return }
+        app.mountManager.refreshStatuses()
+        mountManagerPresented = true
+    }
+
+    private func ensureMountDependenciesAvailable() -> Bool {
+        let status = app.mountManager.dependencyStatus
+        guard status == .ready else {
+            missingMountDependency = status
+            return false
+        }
+        return true
+    }
+
+    private func openMountDependencyGuide() {
+        guard let url = URL(string: "https://github.com/NormanZyq/swift-transfer-tool#%E6%8C%82%E8%BD%BD%E4%BE%9D%E8%B5%96%E5%AE%89%E8%A3%85wip") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: 传输状态栏

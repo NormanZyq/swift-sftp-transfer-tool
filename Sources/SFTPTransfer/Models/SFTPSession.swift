@@ -182,6 +182,19 @@ actor SFTPSession {
         return out
     }
 
+    /// 递归收集目录下所有后代条目（文件与目录，不含目录本身）。
+    /// 用于目录传输展开，以保留空目录和目录结构。
+    func walkItems(_ dir: String) async throws -> [FileItem] {
+        var out: [FileItem] = []
+        for item in try await list(dir) {
+            out.append(item)
+            if item.isDirectory {
+                out += try await walkItems(item.path)
+            }
+        }
+        return out
+    }
+
     /// 远程条目属性。目录大小需要递归统计，可能耗时；调用方应异步展示进度。
     func properties(for item: FileItem) async throws -> RemoteItemProperties {
         if !item.isDirectory {

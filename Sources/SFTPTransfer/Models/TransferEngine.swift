@@ -31,6 +31,7 @@ final class TransferEngine {
         let destinationEndpoint: TransferEndpoint
         let src: String
         let dst: String
+        let isDirectory: Bool
     }
 
     var isRunning = false
@@ -234,32 +235,47 @@ final class TransferEngine {
             )
             return [FileTask(sourceEndpoint: r.source.endpoint,
                              destinationEndpoint: r.destination,
-                             src: r.source.path, dst: dst)]
+                             src: r.source.path, dst: dst,
+                             isDirectory: false)]
         }
         switch (r.source.endpoint, r.destination) {
         case (.local, .local):
             var out: [FileTask] = []
             let base = r.source.path
+            let root = TransferRequest.resolveDestinationPath(
+                endpoint: r.destination,
+                directory: r.destinationDirectory,
+                name: r.source.name
+            )
+            out.append(FileTask(sourceEndpoint: .local, destinationEndpoint: .local,
+                                src: base, dst: root, isDirectory: true))
             if let en = FileManager.default.enumerator(atPath: base) {
                 while let rel = en.nextObject() as? String {
                     let full = (base as NSString).appendingPathComponent(rel)
-                    if LocalFileSystem.isDirectory(full) { continue }
-                    let dst = (r.destinationDirectory as NSString).appendingPathComponent(rel)
+                    let dst = (root as NSString).appendingPathComponent(rel)
                     out.append(FileTask(sourceEndpoint: .local, destinationEndpoint: .local,
-                                         src: full, dst: dst))
+                                         src: full, dst: dst,
+                                         isDirectory: LocalFileSystem.isDirectory(full)))
                 }
             }
             return out
         case (.local, .remote):
             var out: [FileTask] = []
             let base = r.source.path
+            let root = TransferRequest.resolveDestinationPath(
+                endpoint: r.destination,
+                directory: r.destinationDirectory,
+                name: r.source.name
+            )
+            out.append(FileTask(sourceEndpoint: .local, destinationEndpoint: r.destination,
+                                src: base, dst: root, isDirectory: true))
             if let en = FileManager.default.enumerator(atPath: base) {
                 while let rel = en.nextObject() as? String {
                     let full = (base as NSString).appendingPathComponent(rel)
-                    if LocalFileSystem.isDirectory(full) { continue }
-                    let dst = SFTPSession.join(r.destinationDirectory, rel)
+                    let dst = SFTPSession.join(root, rel)
                     out.append(FileTask(sourceEndpoint: .local, destinationEndpoint: r.destination,
-                                         src: full, dst: dst))
+                                         src: full, dst: dst,
+                                         isDirectory: LocalFileSystem.isDirectory(full)))
                 }
             }
             return out
@@ -267,31 +283,51 @@ final class TransferEngine {
             guard let srcSession = sessionResolver(remoteTabID(r.source.endpoint)) else {
                 throw SFTPSessionError.notConnected
             }
-            let files = try await srcSession.walkFiles(r.source.path)
+            let root = TransferRequest.resolveDestinationPath(
+                endpoint: r.destination,
+                directory: r.destinationDirectory,
+                name: r.source.name
+            )
+            let items = try await srcSession.walkItems(r.source.path)
             let prefix = r.source.path.hasSuffix("/") ? r.source.path : r.source.path + "/"
-            return files.map { f in
-                let rel = f.path.hasPrefix(prefix) ? String(f.path.dropFirst(prefix.count)) : f.name
-                let dst = (r.destinationDirectory as NSString).appendingPathComponent(rel)
+            var out = [FileTask(sourceEndpoint: r.source.endpoint, destinationEndpoint: .local,
+                                src: r.source.path, dst: root, isDirectory: true)]
+            out += items.map { item in
+                let rel = item.path.hasPrefix(prefix) ? String(item.path.dropFirst(prefix.count)) : item.name
+                let dst = (root as NSString).appendingPathComponent(rel)
                 return FileTask(sourceEndpoint: r.source.endpoint, destinationEndpoint: .local,
-                                 src: f.path, dst: dst)
+                                src: item.path, dst: dst, isDirectory: item.isDirectory)
             }
+            return out
         case (.remote, .remote):
             guard let srcSession = sessionResolver(remoteTabID(r.source.endpoint)) else {
                 throw SFTPSessionError.notConnected
             }
-            let files = try await srcSession.walkFiles(r.source.path)
+            let root = TransferRequest.resolveDestinationPath(
+                endpoint: r.destination,
+                directory: r.destinationDirectory,
+                name: r.source.name
+            )
+            let items = try await srcSession.walkItems(r.source.path)
             let prefix = r.source.path.hasSuffix("/") ? r.source.path : r.source.path + "/"
-            return files.map { f in
-                let rel = f.path.hasPrefix(prefix) ? String(f.path.dropFirst(prefix.count)) : f.name
-                let dst = SFTPSession.join(r.destinationDirectory, rel)
+            var out = [FileTask(sourceEndpoint: r.source.endpoint, destinationEndpoint: r.destination,
+                                src: r.source.path, dst: root, isDirectory: true)]
+            out += items.map { item in
+                let rel = item.path.hasPrefix(prefix) ? String(item.path.dropFirst(prefix.count)) : item.name
+                let dst = SFTPSession.join(root, rel)
                 return FileTask(sourceEndpoint: r.source.endpoint, destinationEndpoint: r.destination,
-                                 src: f.path, dst: dst)
+                                src: item.path, dst: dst, isDirectory: item.isDirectory)
             }
+            return out
         }
     }
 
     /// 按端点组合执行单文件传输。
     private func performTransfer(_ task: FileTask, sessionResolver: SessionResolver) async throws {
+        if task.isDirectory {
+            try await createDirectory(task.dst, on: task.destinationEndpoint, sessionResolver: sessionResolver)
+            return
+        }
         switch (task.sourceEndpoint, task.destinationEndpoint) {
         case (.local, .local):
             try FileManager.default.createDirectory(
@@ -321,6 +357,20 @@ final class TransferEngine {
                 remoteDst: task.dst,
                 sessionResolver: sessionResolver
             )
+        }
+    }
+
+    private func createDirectory(_ path: String,
+                                 on endpoint: TransferEndpoint,
+                                 sessionResolver: SessionResolver) async throws {
+        switch endpoint {
+        case .local:
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        case .remote:
+            guard let session = sessionResolver(remoteTabID(endpoint)) else {
+                throw SFTPSessionError.notConnected
+            }
+            try await session.makeDirectoryRecursive(path)
         }
     }
 

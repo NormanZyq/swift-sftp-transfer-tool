@@ -30,6 +30,23 @@ struct MountRecord: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+enum MountDependencyStatus: Equatable, Sendable {
+    case ready
+    case missingMacFuse
+    case missingSSHFS
+
+    var message: String {
+        switch self {
+        case .ready:
+            return ""
+        case .missingMacFuse:
+            return "挂载功能需要安装 macFUSE。当前没有检测到 macFUSE，因此无法挂载远程目录。"
+        case .missingSSHFS:
+            return "挂载功能需要安装 sshfs。当前没有检测到 sshfs，因此无法挂载远程目录。"
+        }
+    }
+}
+
 enum MountError: LocalizedError {
     case macFuseMissing
     case sshfsMissing
@@ -72,6 +89,10 @@ final class MountManager {
     init() {
         load()
         refreshStatuses()
+    }
+
+    var dependencyStatus: MountDependencyStatus {
+        MountSystem.dependencyStatus()
     }
 
     func makeRequest(host: HostEntry, remotePath: String, localPath: String) throws -> MountRequest {
@@ -253,12 +274,26 @@ private enum MountSystem {
         return .active
     }
 
+    static func dependencyStatus() -> MountDependencyStatus {
+        guard isMacFuseInstalled() else { return .missingMacFuse }
+        guard sshfsPath() != nil else { return .missingSSHFS }
+        return .ready
+    }
+
     private static func ensureDependencies() throws {
-        if !FileManager.default.fileExists(atPath: "/Library/Filesystems/macfuse.fs")
-            && !FileManager.default.fileExists(atPath: "/Library/Filesystems/osxfuse.fs") {
+        switch dependencyStatus() {
+        case .ready:
+            return
+        case .missingMacFuse:
             throw MountError.macFuseMissing
+        case .missingSSHFS:
+            throw MountError.sshfsMissing
         }
-        guard sshfsPath() != nil else { throw MountError.sshfsMissing }
+    }
+
+    private static func isMacFuseInstalled() -> Bool {
+        FileManager.default.fileExists(atPath: "/Library/Filesystems/macfuse.fs")
+            || FileManager.default.fileExists(atPath: "/Library/Filesystems/osxfuse.fs")
     }
 
     private static func sshfsPath() -> String? {
