@@ -77,31 +77,31 @@ struct ContentView: View {
             MountManagementView()
         }
         // 挂载依赖缺失提示
-        .alert("无法开启挂载功能", isPresented: Binding(
+        .alert(L10n.tr("无法开启挂载功能"), isPresented: Binding(
             get: { missingMountDependency != nil },
             set: { if !$0 { missingMountDependency = nil } }
         ), presenting: missingMountDependency) { _ in
-            Button("查看安装说明") {
+            Button(L10n.tr("查看安装说明")) {
                 openMountDependencyGuide()
                 missingMountDependency = nil
             }
-            Button("好", role: .cancel) { missingMountDependency = nil }
+            Button(L10n.tr("好"), role: .cancel) { missingMountDependency = nil }
         } message: { dependency in
-            Text("\(dependency.message)\n\n安装说明目前在 README 中预留，后续会补充完整步骤。")
+            Text(L10n.tr("%@\n\n安装说明目前在 README 中预留，后续会补充完整步骤。", dependency.message))
         }
         // 未知主机 TOFU 确认
-        .alert("未知主机", isPresented: Binding(get: { app.hostKeyPrompt != nil },
+        .alert(L10n.tr("未知主机"), isPresented: Binding(get: { app.hostKeyPrompt != nil },
                                           set: { if !$0 { app.cancelUnknownHost() } }),
                presenting: app.hostKeyPrompt) { _ in
-            Button("信任并继续") { app.confirmUnknownHost() }
-            Button("取消", role: .cancel) { app.cancelUnknownHost() }
+            Button(L10n.tr("信任并继续")) { app.confirmUnknownHost() }
+            Button(L10n.tr("取消"), role: .cancel) { app.cancelUnknownHost() }
         } message: { prompt in
-            Text("主机 \(prompt.info.host) 不在 known_hosts 中。\n指纹：\(prompt.info.fingerprint)\n\n确认指纹无误后再信任，信任后会写入 known_hosts。")
+            Text(L10n.tr("主机 %@ 不在 known_hosts 中。\n指纹：%@\n\n确认指纹无误后再信任，信任后会写入 known_hosts。", prompt.info.host, prompt.info.fingerprint))
         }
         // 错误
-        .alert("出错了", isPresented: Binding(get: { app.errorMessage != nil },
+        .alert(L10n.tr("出错了"), isPresented: Binding(get: { app.errorMessage != nil },
                                           set: { if !$0 { app.errorMessage = nil } })) {
-            Button("好") {}
+            Button(L10n.tr("好")) {}
         } message: {
             Text(app.errorMessage ?? "")
         }
@@ -136,12 +136,12 @@ struct ContentView: View {
             // 远程会话聚焦时沿用原行为；本地会话聚焦时显示"本地目录"占位，
             // 用户选择服务器后，"连接"会在该本地会话的对侧新建远程会话。
             if app.focusedColumn.activeTab != nil {
-                Text("服务器")
+                Text(L10n.tr("服务器"))
                 Picker("", selection: Binding(
                     get: { app.selectedHostID },
                     set: { app.selectHost($0) }
                 )) {
-                    Text(app.isFocusedLocalTab ? "本地目录" : "（无）")
+                    Text(app.isFocusedLocalTab ? L10n.tr("本地目录") : L10n.tr("（无）"))
                         .tag(Optional<HostEntry.ID>.none)
                     ForEach(app.hosts) { host in
                         Text(host.display).tag(Optional(host.id))
@@ -153,22 +153,22 @@ struct ContentView: View {
                 Button {
                     app.serverConfigPresented = true
                 } label: {
-                    Label("配置服务器", systemImage: "slider.horizontal.3")
+                    Label(L10n.tr("配置服务器"), systemImage: "slider.horizontal.3")
                 }
-                .help("配置服务器")
+                .help(L10n.tr("配置服务器"))
 
                 if let tab = app.focusedActiveRemoteTab {
                     if tab.state == .connected {
-                        Button("断开") { app.disconnectFocused() }
+                        Button(L10n.tr("断开")) { app.disconnectFocused() }
                     } else {
-                        Button(tab.state == .connecting ? "连接中…" : "连接") {
+                        Button(tab.state == .connecting ? L10n.tr("连接中…") : L10n.tr("连接")) {
                             app.connectFocused()
                         }
                         .disabled(!app.canConnectFocused)
                     }
                     if tab.state == .connecting { ProgressView().controlSize(.small) }
                 } else {
-                    Button("连接") {
+                    Button(L10n.tr("连接")) {
                         app.connectFocused()
                     }
                     .disabled(!app.canConnectFocused)
@@ -199,7 +199,7 @@ struct ContentView: View {
         if let tab = app.focusedActiveRemoteTab {
             return tab.statusText
         }
-        return "未连接"
+        return L10n.tr("未连接")
     }
 
     // MARK: 传输按钮
@@ -226,7 +226,7 @@ struct ContentView: View {
             Button(role: .cancel) {
                 app.cancelTransfer()
             } label: {
-                Label("取消", systemImage: "xmark.circle")
+                Label(L10n.tr("取消"), systemImage: "xmark.circle")
             }
             .disabled(!app.engine.isRunning)
 
@@ -235,37 +235,37 @@ struct ContentView: View {
             Button {
                 beginMount()
             } label: {
-                Label("挂载", systemImage: app.mountButtonSystemImage)
+                Label(L10n.tr("挂载"), systemImage: app.mountButtonSystemImage)
             }
             .disabled(!app.canMountCurrentPair)
-            .help("将当前远程目录挂载到当前本地空目录")
+            .help(L10n.tr("将当前远程目录挂载到当前本地空目录"))
 
             Button {
                 openMountManager()
             } label: {
-                Label("管理挂载…", systemImage: "externaldrive")
+                Label(L10n.tr("管理挂载…"), systemImage: "externaldrive")
             }
         }
         .confirmationDialog(
-            "远程中转提示",
+            L10n.tr("远程中转提示"),
             isPresented: Binding(
                 get: { pendingRelay != nil },
                 set: { if !$0 { pendingRelay = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("继续") {
+            Button(L10n.tr("继续")) {
                 relayAcknowledged = true
                 let snapshot = pendingRelay
                 pendingRelay = nil
                 if let snapshot { app.performTransferFromSnapshot(snapshot) }
             }
-            Button("取消", role: .cancel) { pendingRelay = nil }
+            Button(L10n.tr("取消"), role: .cancel) { pendingRelay = nil }
         } message: {
-            Text("本次传输会在两台远程服务器之间通过本机中转，会在硬盘上产生临时文件。\n\n确认后下次传输将不再询问。")
+            Text(L10n.tr("本次传输会在两台远程服务器之间通过本机中转，会在硬盘上产生临时文件。\n\n确认后下次传输将不再询问。"))
         }
         .confirmationDialog(
-            "确认挂载",
+            L10n.tr("确认挂载"),
             isPresented: Binding(
                 get: { pendingMount != nil },
                 set: { if !$0 { pendingMount = nil } }
@@ -273,13 +273,13 @@ struct ContentView: View {
             titleVisibility: .visible,
             presenting: pendingMount
         ) { request in
-            Button("挂载") {
+            Button(L10n.tr("挂载")) {
                 pendingMount = nil
                 app.performMount(request)
             }
-            Button("取消", role: .cancel) { pendingMount = nil }
+            Button(L10n.tr("取消"), role: .cancel) { pendingMount = nil }
         } message: { request in
-            Text("将把远程目录\n\(request.expectedSource)\n挂载到本地空目录：\n\(request.localPath)\n\n不会删除、移动或覆盖本地目录。若目录不为空或已经是挂载点，操作会被拒绝。")
+            Text(L10n.tr("将把远程目录\n%@\n挂载到本地空目录：\n%@\n\n不会删除、移动或覆盖本地目录。若目录不为空或已经是挂载点，操作会被拒绝。", request.expectedSource, request.localPath))
         }
     }
 
@@ -374,15 +374,15 @@ struct ContentView: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .rotationEffect(.degrees(statusVisible ? 90 : 0))
-                    Text("传输状态").font(.subheadline.weight(.semibold))
+                    Text(L10n.tr("传输状态")).font(.subheadline.weight(.semibold))
                     if !statusVisible && app.engine.queueTotal > 0 {
-                        Text("· 上次 \(app.engine.queueIndex)/\(app.engine.queueTotal)")
+                        Text(L10n.tr("· 上次 %d/%d", app.engine.queueIndex, app.engine.queueTotal))
                             .font(.caption).monospacedDigit().foregroundStyle(.tertiary)
                     }
                 }
             }
             .buttonStyle(.plain)
-            .help(statusExpanded ? "收起（传输时会自动展开）" : "展开")
+            .help(statusExpanded ? L10n.tr("收起（传输时会自动展开）") : L10n.tr("展开"))
             Spacer()
         }
     }
@@ -390,12 +390,12 @@ struct ContentView: View {
     private var statusDetail: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(app.engine.isRunning ? app.engine.currentName : "等待传输…")
+                Text(app.engine.isRunning ? app.engine.currentName : L10n.tr("等待传输…"))
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
                 Spacer()
                 if app.engine.queueTotal > 0 {
-                    Text("总进度 \(app.engine.queueIndex) / \(app.engine.queueTotal)")
+                    Text(L10n.tr("总进度 %d / %d", app.engine.queueIndex, app.engine.queueTotal))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -407,7 +407,7 @@ struct ContentView: View {
                 }
                 Spacer()
                 if app.engine.isRunning, app.engine.etaSeconds > 0 {
-                    Text("剩余 \(formatEta(app.engine.etaSeconds))")
+                    Text(L10n.tr("剩余 %@", formatEta(app.engine.etaSeconds)))
                         .foregroundStyle(.secondary).monospacedDigit()
                 }
             }
@@ -435,13 +435,13 @@ struct ContentView: View {
     }
 
     private func formatEta(_ seconds: Int) -> String {
-        if seconds < 60 { return "\(seconds) 秒" }
+        if seconds < 60 { return L10n.tr("%d 秒", seconds) }
         let m = seconds / 60
         let s = seconds % 60
-        if m < 60 { return "\(m) 分 \(s) 秒" }
+        if m < 60 { return L10n.tr("%d 分 %d 秒", m, s) }
         let h = m / 60
         let mm = m % 60
-        return "\(h) 小时 \(mm) 分"
+        return L10n.tr("%d 小时 %d 分", h, mm)
     }
 
     private var logView: some View {
@@ -484,18 +484,18 @@ struct PassphraseSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("私钥需要口令")
+            Text(L10n.tr("私钥需要口令"))
                 .font(.headline)
-            Text("\(host.alias) 使用的私钥带有口令，请输入以解锁（口令只用于本地解密，不会保存）。")
+            Text(L10n.tr("%@ 使用的私钥带有口令，请输入以解锁（口令只用于本地解密，不会保存）。", host.alias))
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            SecureField("私钥口令", text: $passphrase)
+            SecureField(L10n.tr("私钥口令"), text: $passphrase)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { onSubmit(passphrase) }
             HStack {
                 Spacer()
-                Button("取消", role: .cancel) { onCancel() }
-                Button("解锁并连接") { onSubmit(passphrase) }
+                Button(L10n.tr("取消"), role: .cancel) { onCancel() }
+                Button(L10n.tr("解锁并连接")) { onSubmit(passphrase) }
                     .keyboardShortcut(.defaultAction)
             }
         }

@@ -4,6 +4,7 @@ import PackageDescription
 // 原生 macOS SFTP 双窗格传输工具。
 let package = Package(
     name: "SFTPTransfer",
+    defaultLocalization: "zh-Hans",
     platforms: [
         .macOS(.v14) // Citadel 要求 macOS 14+
     ],
@@ -19,6 +20,9 @@ let package = Package(
             name: "SFTPTransfer",
             dependencies: [
                 .product(name: "Citadel", package: "Citadel"),
+            ],
+            resources: [
+                .process("Resources"),
             ]
         ),
     ]

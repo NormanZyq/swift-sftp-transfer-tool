@@ -45,12 +45,12 @@ struct ServerConfigView: View {
         }
         .frame(width: 760, height: 520)
         .interactiveDismissDisabled(hasUnsavedChanges)
-        .alert("有未保存的服务器配置", isPresented: $showUnsavedAlert) {
-            Button("保存") { saveThenRunPendingAction() }
-            Button("不保存", role: .destructive) { discardThenRunPendingAction() }
-            Button("取消", role: .cancel) { pendingAction = nil }
+        .alert(L10n.tr("有未保存的服务器配置"), isPresented: $showUnsavedAlert) {
+            Button(L10n.tr("保存")) { saveThenRunPendingAction() }
+            Button(L10n.tr("不保存"), role: .destructive) { discardThenRunPendingAction() }
+            Button(L10n.tr("取消"), role: .cancel) { pendingAction = nil }
         } message: {
-            Text("当前服务器配置尚未保存。要先保存这些更改吗？")
+            Text(L10n.tr("当前服务器配置尚未保存。要先保存这些更改吗？"))
         }
         .onAppear {
             if selectedID == nil {
@@ -64,13 +64,13 @@ struct ServerConfigView: View {
             Image(systemName: "server.rack")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            Text("服务器配置")
+            Text(L10n.tr("服务器配置"))
                 .font(.headline)
             Spacer()
             Button {
                 refreshSSHConfig()
             } label: {
-                Label("从 SSH 配置读取", systemImage: "arrow.clockwise")
+                Label(L10n.tr("从 SSH 配置读取"), systemImage: "arrow.clockwise")
             }
         }
         .padding(14)
@@ -115,7 +115,7 @@ struct ServerConfigView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("添加服务器")
+                .help(L10n.tr("添加服务器"))
 
                 Button(role: .destructive) {
                     deleteSelected()
@@ -123,7 +123,7 @@ struct ServerConfigView: View {
                     Image(systemName: "trash")
                 }
                 .disabled(selectedHost?.isEditable != true)
-                .help("删除手动服务器")
+                .help(L10n.tr("删除手动服务器"))
 
                 Spacer()
 
@@ -133,7 +133,7 @@ struct ServerConfigView: View {
                     Image(systemName: "chevron.up")
                 }
                 .disabled(selectedID == nil || selectedID == app.hosts.first?.id || selectedID == tempDraftID)
-                .help("上移")
+                .help(L10n.tr("上移"))
 
                 Button {
                     moveSelected(1)
@@ -141,7 +141,7 @@ struct ServerConfigView: View {
                     Image(systemName: "chevron.down")
                 }
                 .disabled(selectedID == nil || selectedID == app.hosts.last?.id || selectedID == tempDraftID)
-                .help("下移")
+                .help(L10n.tr("下移"))
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 10)
@@ -154,23 +154,23 @@ struct ServerConfigView: View {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 14) {
             if selectedID == nil {
-                ContentUnavailableView("未选择服务器", systemImage: "server.rack")
+                ContentUnavailableView(L10n.tr("未选择服务器"), systemImage: "server.rack")
             } else {
                 sourceHeader
                 Form {
-                    TextField("名称", text: $draft.alias)
+                    TextField(L10n.tr("名称"), text: $draft.alias)
                         .disabled(!draft.isEditable)
-                    TextField("地址 / IP", text: $draft.hostName)
+                    TextField(L10n.tr("地址 / IP"), text: $draft.hostName)
                         .disabled(!draft.isEditable)
-                    TextField("端口", text: $draft.port)
+                    TextField(L10n.tr("端口"), text: $draft.port)
                         .disabled(!draft.isEditable)
-                    TextField("用户名", text: $draft.user)
+                    TextField(L10n.tr("用户名"), text: $draft.user)
                         .disabled(!draft.isEditable)
 
                     if draft.isEditable {
-                        SecureField(draft.isNew ? "密码" : "密码（留空保持不变）", text: $draft.password)
+                        SecureField(draft.isNew ? L10n.tr("密码") : L10n.tr("密码（留空保持不变）"), text: $draft.password)
                     } else {
-                        TextField("身份文件", text: $draft.identityFile)
+                        TextField(L10n.tr("身份文件"), text: $draft.identityFile)
                             .disabled(true)
                     }
                 }
@@ -181,16 +181,16 @@ struct ServerConfigView: View {
                         testDraft()
                     } label: {
                         if isTesting {
-                            Label("测试中…", systemImage: "hourglass")
+                            Label(L10n.tr("测试中…"), systemImage: "hourglass")
                         } else {
-                            Label("测试连接", systemImage: "bolt.horizontal")
+                            Label(L10n.tr("测试连接"), systemImage: "bolt.horizontal")
                         }
                     }
                     .disabled(isTesting || !draft.canBuildHost)
 
                     Spacer()
 
-                    Button("保存") {
+                    Button(L10n.tr("保存")) {
                         _ = saveDraft()
                     }
                     .keyboardShortcut(.defaultAction)
@@ -211,9 +211,9 @@ struct ServerConfigView: View {
 
     private var sourceHeader: some View {
         HStack(spacing: 8) {
-            Text(draft.isEditable ? (draft.isNew ? "新服务器" : "手动服务器") : "SSH 配置")
+            Text(draft.isEditable ? (draft.isNew ? L10n.tr("新服务器") : L10n.tr("手动服务器")) : L10n.tr("SSH 配置"))
                 .font(.subheadline.weight(.semibold))
-            Text(draft.isEditable ? "可编辑，密码保存到钥匙串" : "只读，可通过刷新同步 ~/.ssh/config")
+            Text(draft.isEditable ? L10n.tr("可编辑，密码保存到钥匙串") : L10n.tr("只读，可通过刷新同步 ~/.ssh/config"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -223,7 +223,7 @@ struct ServerConfigView: View {
     private var footer: some View {
         HStack {
             Spacer()
-            Button("完成") { requestClose() }
+            Button(L10n.tr("完成")) { requestClose() }
         }
         .padding(14)
     }
@@ -235,7 +235,7 @@ struct ServerConfigView: View {
         } else if selectedID != tempDraftID {
             loadSelectedHost()
         }
-        showStatus("已刷新 SSH 配置条目")
+        showStatus(L10n.tr("已刷新 SSH 配置条目"))
     }
 
     private func requestSelection(_ id: HostEntry.ID?) {
@@ -332,7 +332,7 @@ struct ServerConfigView: View {
             }
             draft = ServerDraft(host: host)
             originalDraft = draft
-            showStatus("已保存服务器")
+            showStatus(L10n.tr("已保存服务器"))
             return true
         } catch {
             showStatus(error.localizedDescription, isError: true)
@@ -368,7 +368,7 @@ struct ServerConfigView: View {
         guard let id = selectedID else { return }
         app.deleteManualHost(id)
         select(app.hosts.first?.id)
-        showStatus("已删除服务器")
+        showStatus(L10n.tr("已删除服务器"))
     }
 
     private func moveSelected(_ delta: Int) {
@@ -395,7 +395,7 @@ struct ServerConfigView: View {
                 isTesting = false
                 switch result {
                 case .success:
-                    showStatus("连接测试成功")
+                    showStatus(L10n.tr("连接测试成功"))
                 case .failure(let error):
                     showStatus(error.localizedDescription, isError: true)
                 }
@@ -441,7 +441,7 @@ private enum ServerListEntry: Identifiable {
             return host.alias
         case .draft(_, let draft):
             let alias = draft.alias.trimmingCharacters(in: .whitespacesAndNewlines)
-            return alias.isEmpty ? "新服务器" : alias
+            return alias.isEmpty ? L10n.tr("新服务器") : alias
         }
     }
 
@@ -451,7 +451,7 @@ private enum ServerListEntry: Identifiable {
             return "\(host.user)@\(host.hostName):\(host.port)"
         case .draft(_, let draft):
             let host = draft.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if host.isEmpty { return "正在添加，尚未保存" }
+            if host.isEmpty { return L10n.tr("正在添加，尚未保存") }
             return "\(draft.user)@\(host):\(draft.port)"
         }
     }
@@ -482,7 +482,7 @@ private struct ServerListRow: View {
             }
             if entry.isDraft {
                 Spacer(minLength: 4)
-                Text("未保存")
+                Text(L10n.tr("未保存"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -614,9 +614,9 @@ private enum ServerDraftError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidRequiredFields:
-            return "名称、地址和用户名不能为空"
+            return L10n.tr("名称、地址和用户名不能为空")
         case .invalidPort:
-            return "端口必须是 1 到 65535 之间的数字"
+            return L10n.tr("端口必须是 1 到 65535 之间的数字")
         }
     }
 }

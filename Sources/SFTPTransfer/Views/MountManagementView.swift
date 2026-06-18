@@ -19,7 +19,7 @@ struct MountManagementView: View {
             app.mountManager.refreshStatuses()
         }
         .confirmationDialog(
-            "取消挂载",
+            L10n.tr("取消挂载"),
             isPresented: Binding(
                 get: { pendingUnmount != nil },
                 set: { if !$0 { pendingUnmount = nil } }
@@ -27,16 +27,16 @@ struct MountManagementView: View {
             titleVisibility: .visible,
             presenting: pendingUnmount
         ) { record in
-            Button("取消挂载", role: .destructive) {
+            Button(L10n.tr("取消挂载"), role: .destructive) {
                 pendingUnmount = nil
                 Task { await unmount(record) }
             }
-            Button("保留", role: .cancel) { pendingUnmount = nil }
+            Button(L10n.tr("保留"), role: .cancel) { pendingUnmount = nil }
         } message: { record in
-            Text("将只取消本应用记录的 sshfs 挂载：\n\(record.localPath)\n\n不会删除这个本地目录。")
+            Text(L10n.tr("将只取消本应用记录的 sshfs 挂载：\n%@\n\n不会删除这个本地目录。", record.localPath))
         }
         .confirmationDialog(
-            "重新挂载",
+            L10n.tr("重新挂载"),
             isPresented: Binding(
                 get: { pendingRemount != nil },
                 set: { if !$0 { pendingRemount = nil } }
@@ -44,27 +44,27 @@ struct MountManagementView: View {
             titleVisibility: .visible,
             presenting: pendingRemount
         ) { record in
-            Button("重新挂载") {
+            Button(L10n.tr("重新挂载")) {
                 pendingRemount = nil
                 Task { await remount(record) }
             }
-            Button("取消", role: .cancel) { pendingRemount = nil }
+            Button(L10n.tr("取消"), role: .cancel) { pendingRemount = nil }
         } message: { record in
-            Text("会再次把远程目录\n\(record.expectedSource)\n挂载到本地空目录：\n\(record.localPath)")
+            Text(L10n.tr("会再次把远程目录\n%@\n挂载到本地空目录：\n%@", record.expectedSource, record.localPath))
         }
     }
 
     private var header: some View {
         HStack {
-            Text("管理挂载")
+            Text(L10n.tr("管理挂载"))
                 .font(.headline)
             Spacer()
             Button {
                 app.mountManager.refreshStatuses()
             } label: {
-                Label("刷新", systemImage: "arrow.clockwise")
+                Label(L10n.tr("刷新"), systemImage: "arrow.clockwise")
             }
-            Button("完成") { dismiss() }
+            Button(L10n.tr("完成")) { dismiss() }
         }
         .padding(14)
     }
@@ -76,7 +76,7 @@ struct MountManagementView: View {
                 Image(systemName: "externaldrive.badge.questionmark")
                     .font(.system(size: 34))
                     .foregroundStyle(.secondary)
-                Text("还没有通过本应用创建的挂载。")
+                Text(L10n.tr("还没有通过本应用创建的挂载。"))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,7 +103,7 @@ struct MountManagementView: View {
 
     private var footer: some View {
         HStack {
-            Text("只管理由本应用创建并记录的 sshfs 挂载；不会尝试接管其它系统挂载。")
+            Text(L10n.tr("只管理由本应用创建并记录的 sshfs 挂载；不会尝试接管其它系统挂载。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -114,7 +114,7 @@ struct MountManagementView: View {
     private func unmount(_ record: MountRecord) async {
         do {
             try await app.mountManager.unmount(record)
-            app.engine.appendLog("✓ 已取消挂载 \(record.localPath)")
+            app.engine.appendLog(L10n.tr("✓ 已取消挂载 %@", record.localPath))
         } catch {
             app.presentError(error)
         }
@@ -123,7 +123,7 @@ struct MountManagementView: View {
     private func remount(_ record: MountRecord) async {
         do {
             try await app.mountManager.remount(record)
-            app.engine.appendLog("✓ 已重新挂载 \(record.expectedSource) → \(record.localPath)")
+            app.engine.appendLog(L10n.tr("✓ 已重新挂载 %@ → %@", record.expectedSource, record.localPath))
         } catch {
             app.presentError(error)
         }
@@ -178,26 +178,26 @@ private struct MountRecordRow: View {
         switch record.state {
         case .active:
             Button { onOpenTerminal() } label: { Image(systemName: "terminal") }
-                .help("在终端打开")
+                .help(L10n.tr("在终端打开"))
             Button { onOpenFinder() } label: { Image(systemName: "folder") }
-                .help("在访达中打开")
+                .help(L10n.tr("在访达中打开"))
             Button { onCopy() } label: { Image(systemName: "doc.on.doc") }
-                .help("复制本地路径")
+                .help(L10n.tr("复制本地路径"))
             Button(role: .destructive) { onUnmount() } label: { Image(systemName: "eject") }
-                .help("取消挂载")
+                .help(L10n.tr("取消挂载"))
                 .disabled(isBusy)
         case .stale:
             Button { onRemount() } label: { Image(systemName: "arrow.clockwise.circle") }
-                .help("重新挂载")
+                .help(L10n.tr("重新挂载"))
                 .disabled(isBusy)
             Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
-                .help("删除记录")
+                .help(L10n.tr("删除记录"))
                 .disabled(isBusy)
         case .conflict:
             Button { onCopy() } label: { Image(systemName: "doc.on.doc") }
-                .help("复制本地路径")
+                .help(L10n.tr("复制本地路径"))
             Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
-                .help("删除记录")
+                .help(L10n.tr("删除记录"))
                 .disabled(isBusy)
         }
     }
@@ -205,11 +205,11 @@ private struct MountRecordRow: View {
     private var statusText: String {
         switch record.state {
         case .active:
-            return "已挂载"
+            return L10n.tr("已挂载")
         case .stale:
-            return "已失效，可在确认后重新挂载"
+            return L10n.tr("已失效，可在确认后重新挂载")
         case .conflict:
-            return "本地路径当前被其它挂载占用，已禁止取消挂载"
+            return L10n.tr("本地路径当前被其它挂载占用，已禁止取消挂载")
         }
     }
 

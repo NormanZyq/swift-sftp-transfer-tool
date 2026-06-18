@@ -267,7 +267,7 @@ private struct TabChip<Title: View, Accessory: View>: View {
                 }
                 .buttonStyle(.plain)
                 .opacity(isHovered || isSelected ? 1 : 0)
-                .help("关闭")
+                .help(L10n.tr("关闭"))
             }
         }
         .padding(.leading, 10)
@@ -386,8 +386,8 @@ struct ColumnTabBarView: View {
                 }
             },
             addLabel: {
-                AddMenuButton(help: "新建标签或打开新连接") {
-                    Button("新建本地标签") {
+                AddMenuButton(help: L10n.tr("新建标签或打开新连接")) {
+                    Button(L10n.tr("新建本地标签")) {
                         app.setFocus(to: column)
                         app.addLocalTab(in: column)
                     }
@@ -398,7 +398,7 @@ struct ColumnTabBarView: View {
                         }
                     } else {
                         Divider()
-                        Button("未发现 ~/.ssh/config 中的主机") {}
+                        Button(L10n.tr("未发现 ~/.ssh/config 中的主机")) {}
                             .disabled(true)
                     }
                 }
@@ -493,9 +493,9 @@ private struct DuplicateRemoteHostPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("已存在连接会话")
+            Text(L10n.tr("已存在连接会话"))
                 .font(.headline)
-            Text("已经存在这个服务器的连接会话，确定新建吗？")
+            Text(L10n.tr("已经存在这个服务器的连接会话，确定新建吗？"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Text(host.display)
@@ -505,10 +505,10 @@ private struct DuplicateRemoteHostPopover: View {
                 .truncationMode(.middle)
 
             HStack {
-                Button("取消", role: .cancel) { onCancel() }
+                Button(L10n.tr("取消"), role: .cancel) { onCancel() }
                 Spacer()
-                Button("跳转至") { onJump() }
-                Button("确定") { onConfirm() }
+                Button(L10n.tr("跳转至")) { onJump() }
+                Button(L10n.tr("确定")) { onConfirm() }
                     .keyboardShortcut(.defaultAction)
             }
         }

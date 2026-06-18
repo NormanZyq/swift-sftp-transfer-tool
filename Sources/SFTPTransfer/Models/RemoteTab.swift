@@ -17,7 +17,7 @@ final class RemoteTab: Identifiable {
     var host: HostEntry?
 
     var state: ConnectionState = .disconnected
-    var statusText = "未连接"
+    var statusText = L10n.tr("未连接")
     /// 连接被动丢失后，下次重连优先回到断线前的 `pane.currentPath`。
     var shouldRestorePathOnNextConnect = false
 
@@ -39,7 +39,7 @@ final class RemoteTab: Identifiable {
     }
 
     var title: String {
-        host?.alias ?? "新连接"
+        host?.alias ?? L10n.tr("新连接")
     }
 
     /// 是否已连上。`AppModel.isActiveRemoteTabConnected` 等会读取此值。
@@ -54,7 +54,7 @@ final class RemoteTab: Identifiable {
             self.pane.selection = []
             self.shouldRestorePathOnNextConnect = false
             self.state = .disconnected
-            self.statusText = "未连接"
+            self.statusText = L10n.tr("未连接")
         }
     }
 }

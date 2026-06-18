@@ -8,12 +8,12 @@ enum PasswordVaultError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingPassword:
-            return "未保存该服务器的密码"
+            return L10n.tr("未保存该服务器的密码")
         case .unexpectedStatus(let status):
             if let message = SecCopyErrorMessageString(status, nil) as String? {
-                return "钥匙串操作失败：\(message)"
+                return L10n.tr("钥匙串操作失败：%@", message)
             }
-            return "钥匙串操作失败：\(status)"
+            return L10n.tr("钥匙串操作失败：%d", status)
         }
     }
 }

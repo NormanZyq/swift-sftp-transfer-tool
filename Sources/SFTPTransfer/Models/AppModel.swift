@@ -57,7 +57,7 @@ final class AppModel {
     func refreshSSHConfigHosts() {
         rebuildHosts()
         saveServerCatalog()
-        engine.appendLog("已刷新 ~/.ssh/config 服务器条目")
+        engine.appendLog(L10n.tr("已刷新 ~/.ssh/config 服务器条目"))
     }
 
     func saveManualHost(_ host: HostEntry, password: String?) throws {
@@ -472,14 +472,14 @@ final class AppModel {
     }
 
     private func replaceConnectedHost(on tab: RemoteTab, with host: HostEntry) {
-        tab.statusText = "正在切换到 \(host.alias)…"
+        tab.statusText = L10n.tr("正在切换到 %@…", host.alias)
 
         Task { [weak self, tab] in
             await tab.session.disconnect()
             tab.pane.items = []
             tab.pane.selection = []
             tab.state = .connecting
-            tab.statusText = "连接中 \(host.alias)…"
+            tab.statusText = L10n.tr("连接中 %@…", host.alias)
             self?.assign(host, to: tab)
             await self?.runConnect(tab: tab, host: host, passphrase: nil)
         }
@@ -502,7 +502,7 @@ final class AppModel {
 
         guard let tab = focusedActiveRemoteTab, let host = tab.host, tab.state == .disconnected else { return }
         tab.state = .connecting
-        tab.statusText = "连接中 \(host.alias)…"
+        tab.statusText = L10n.tr("连接中 %@…", host.alias)
 
         Task { [weak self] in
             await self?.runConnect(tab: tab, host: host, passphrase: passphrase)
@@ -523,7 +523,7 @@ final class AppModel {
 
         guard tab.state == .disconnected else { return }
         tab.state = .connecting
-        tab.statusText = "连接中 \(host.alias)…"
+        tab.statusText = L10n.tr("连接中 %@…", host.alias)
         Task { [weak self] in
             await self?.runConnect(tab: tab, host: host, passphrase: passphrase)
         }
@@ -540,14 +540,14 @@ final class AppModel {
         guard let prompt = hostKeyPrompt, let tab = focusedActiveRemoteTab, tab.host != nil else { return }
         hostKeyPrompt = nil
         KnownHosts.append(host: prompt.info.host, port: prompt.info.port, openSSHLine: prompt.info.openSSHLine)
-        engine.appendLog("已将 \(prompt.info.host) 写入 known_hosts")
+        engine.appendLog(L10n.tr("已将 %@ 写入 known_hosts", prompt.info.host))
         connect(passphrase: prompt.passphrase)
     }
 
     func cancelUnknownHost() {
         hostKeyPrompt = nil
         focusedActiveRemoteTab?.state = .disconnected
-        focusedActiveRemoteTab?.statusText = "未连接"
+        focusedActiveRemoteTab?.statusText = L10n.tr("未连接")
     }
 
     /// 真正跑 connect 的私有方法：被 `connect` 触发，因 pass prompt / 未知主机可能要重入。
@@ -557,12 +557,12 @@ final class AppModel {
             auth = try PrivateKeyLoader.authMethod(for: host, passphrase: passphrase)
         } catch PrivateKeyError.needsPassphrase {
             tab.state = .disconnected
-            tab.statusText = "未连接"
+            tab.statusText = L10n.tr("未连接")
             passphrasePrompt = PassphrasePrompt(host: host)
             return
         } catch {
             tab.state = .disconnected
-            tab.statusText = "未连接"
+            tab.statusText = L10n.tr("未连接")
             fail(error)
             return
         }
@@ -573,23 +573,23 @@ final class AppModel {
         do {
             try await tab.session.connect(host: host, auth: auth, validator: validator)
             tab.state = .connected
-            tab.statusText = "已连接 \(host.alias)"
-            engine.appendLog("✓ 已连接 \(host.alias)")
+            tab.statusText = L10n.tr("已连接 %@", host.alias)
+            engine.appendLog(L10n.tr("✓ 已连接 %@", host.alias))
             try await loadInitialRemoteDirectory(for: tab)
             tab.shouldRestorePathOnNextConnect = false
         } catch {
             switch validator.outcome {
             case .unknown(let info):
                 tab.state = .disconnected
-                tab.statusText = "未连接"
+                tab.statusText = L10n.tr("未连接")
                 hostKeyPrompt = HostKeyPrompt(host: host, passphrase: passphrase, info: info)
             case .mismatch(let mismatch):
                 tab.state = .disconnected
-                tab.statusText = "未连接"
+                tab.statusText = L10n.tr("未连接")
                 fail(mismatch)
             case .none:
                 tab.state = .disconnected
-                tab.statusText = "未连接"
+                tab.statusText = L10n.tr("未连接")
                 fail(error)
             }
         }
@@ -610,12 +610,12 @@ final class AppModel {
                 let items = try await tab.session.list(restorePath)
                 applyRemoteListing(items, path: restorePath, to: tab.pane)
                 if restorePath != home {
-                    engine.appendLog("已恢复远程目录 \(restorePath)")
+                    engine.appendLog(L10n.tr("已恢复远程目录 %@", restorePath))
                 }
                 return
             } catch {
                 if SFTPSession.isConnectionLost(error) { throw error }
-                engine.appendLog("无法恢复远程目录 \(restorePath)，已回到初始目录：\(error.localizedDescription)")
+                engine.appendLog(L10n.tr("无法恢复远程目录 %@，已回到初始目录：%@", restorePath, error.localizedDescription))
             }
         }
 
@@ -637,7 +637,7 @@ final class AppModel {
     func disconnectFocused() {
         guard let tab = focusedActiveRemoteTab else { return }
         tab.disconnectIfNeeded()
-        engine.appendLog("已断开连接")
+        engine.appendLog(L10n.tr("已断开连接"))
     }
 
     @discardableResult
@@ -650,9 +650,9 @@ final class AppModel {
             markConnectionLost(tab, action: action, showAlert: showAlert)
             return true
         }
-        engine.appendLog("✗ \(action)：\(error.localizedDescription)")
+        engine.appendLog(L10n.tr("✗ %@：%@", action, error.localizedDescription))
         if showAlert {
-            errorMessage = "\(action)：\(error.localizedDescription)"
+            errorMessage = L10n.tr("%@：%@", action, error.localizedDescription)
         }
         return false
     }
@@ -660,13 +660,13 @@ final class AppModel {
     private func markConnectionLost(_ tab: RemoteTab, action: String, showAlert: Bool = true) {
         guard tab.state != .disconnected else { return }
         tab.state = .disconnected
-        tab.statusText = "连接已断开"
+        tab.statusText = L10n.tr("连接已断开")
         tab.shouldRestorePathOnNextConnect = true
         tab.pane.selection = []
         tab.pane.searchResults = nil
-        let hostName = tab.host?.alias ?? "服务器"
-        let message = "与 \(hostName) 的连接已断开，请重新连接后重试。"
-        engine.appendLog("✗ \(action)：\(message)")
+        let hostName = tab.host?.alias ?? L10n.tr("服务器")
+        let message = L10n.tr("与 %@ 的连接已断开，请重新连接后重试。", hostName)
+        engine.appendLog(L10n.tr("✗ %@：%@", action, message))
         if showAlert { errorMessage = message }
         Task { [session = tab.session] in
             await session.disconnect()
@@ -675,7 +675,7 @@ final class AppModel {
 
     private func fail(_ error: Error) {
         errorMessage = error.localizedDescription
-        engine.appendLog("✗ \(error.localizedDescription)")
+        engine.appendLog(L10n.tr("✗ %@", error.localizedDescription))
     }
 
     func presentError(_ error: Error) {
@@ -719,7 +719,7 @@ final class AppModel {
 
     func makeMountRequestForCurrentPair() throws -> MountRequest {
         guard let pair = currentMountPair, let host = pair.remote.host else {
-            throw MountError.commandFailed("当前左右会话需要一边是已连接远程目录，另一边是本地目录，才能挂载。")
+            throw MountError.commandFailed(L10n.tr("当前左右会话需要一边是已连接远程目录，另一边是本地目录，才能挂载。"))
         }
         return try mountManager.makeRequest(
             host: host,
@@ -733,7 +733,7 @@ final class AppModel {
             guard let self else { return }
             do {
                 try await mountManager.mount(request)
-                engine.appendLog("✓ 已挂载 \(request.expectedSource) → \(request.localPath)")
+                engine.appendLog(L10n.tr("✓ 已挂载 %@ → %@", request.expectedSource, request.localPath))
                 if let pane = [leftColumn.activePane, rightColumn.activePane].compactMap({ $0 }).first(where: { $0.currentPath == request.localPath }) {
                     await pane.reload()
                 }
@@ -792,7 +792,7 @@ final class AppModel {
     }
 
     private func titleForTransfer(from src: PaneColumnModel, to dest: PaneColumnModel) -> String {
-        guard let srcTab = src.activeTab, let destTab = dest.activeTab else { return "传输" }
+        guard let srcTab = src.activeTab, let destTab = dest.activeTab else { return L10n.tr("传输") }
         return Self.titleForTransfer(source: srcTab, destination: destTab)
     }
 
@@ -905,10 +905,10 @@ final class AppModel {
 
     private static func titleForTransfer(source: BrowserTab, destination: BrowserTab) -> String {
         switch (source.isRemote, destination.isRemote) {
-        case (false, true): return "上传选中"
-        case (true, false): return "下载选中"
-        case (false, false): return "本地复制"
-        case (true, true):  return "远程中转"
+        case (false, true): return L10n.tr("上传选中")
+        case (true, false): return L10n.tr("下载选中")
+        case (false, false): return L10n.tr("本地复制")
+        case (true, true):  return L10n.tr("远程中转")
         }
     }
 
@@ -958,7 +958,7 @@ final class AppModel {
             if case .remote(let tabID, _) = srcEndpoint,
                (leftColumn.tabs + rightColumn.tabs).compactMap({ $0.remoteTab })
                 .first(where: { $0.id == tabID }) == nil {
-                engine.appendLog("✗ 跳过 \(ref.name)：来源远程 tab 已关闭")
+                engine.appendLog(L10n.tr("✗ 跳过 %@：来源远程 tab 已关闭", ref.name))
                 continue
             }
             // 校验远程目标端：必须已连接
@@ -1000,12 +1000,12 @@ final class AppModel {
         let hasRemote = refs.contains { if case .remote = $0 { return true } else { return false } }
         let hasLocal = refs.contains { if case .local = $0 { return true } else { return false } }
         switch (hasRemote, hasLocal, dest) {
-        case (true, false, .local): return "下载"
-        case (false, true, .remote): return "上传"
-        case (true, false, .remote): return "远程中转"
-        case (false, true, .local): return "本地复制"
-        case (true, true, _): return "传输"
-        case (false, false, _): return "传输"
+        case (true, false, .local): return L10n.tr("下载")
+        case (false, true, .remote): return L10n.tr("上传")
+        case (true, false, .remote): return L10n.tr("远程中转")
+        case (false, true, .local): return L10n.tr("本地复制")
+        case (true, true, _): return L10n.tr("传输")
+        case (false, false, _): return L10n.tr("传输")
         }
     }
 

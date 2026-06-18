@@ -56,8 +56,8 @@ final class PaneModel: Identifiable {
     var remoteTitle: String?
     var title: String {
         switch kind {
-        case .local: return "本地"
-        case .remote: return remoteTitle ?? "远程"
+        case .local: return L10n.tr("本地")
+        case .remote: return remoteTitle ?? L10n.tr("远程")
         }
     }
 
@@ -132,7 +132,7 @@ final class PaneModel: Identifiable {
                 selection = []
                 return true
             } catch {
-                app.handleRemoteOperationFailure(error, pane: self, action: "无法列出 \(currentPath)", showAlert: showAlert)
+                app.handleRemoteOperationFailure(error, pane: self, action: L10n.tr("无法列出 %@", currentPath), showAlert: showAlert)
                 selection = []
                 return false
             }
@@ -230,7 +230,7 @@ final class PaneModel: Identifiable {
                 do {
                     navigate(to: try await session.homeDirectory())
                 } catch {
-                    app.handleRemoteOperationFailure(error, pane: self, action: "无法读取远程主目录")
+                    app.handleRemoteOperationFailure(error, pane: self, action: L10n.tr("无法读取远程主目录"))
                 }
             }
         }
@@ -257,7 +257,7 @@ final class PaneModel: Identifiable {
             do {
                 searchResults = try await session.search(in: dir, query: query, includeHidden: hidden)
             } catch {
-                app.handleRemoteOperationFailure(error, pane: self, action: "搜索失败")
+                app.handleRemoteOperationFailure(error, pane: self, action: L10n.tr("搜索失败"))
                 searchResults = []
             }
         }
@@ -283,10 +283,10 @@ final class PaneModel: Identifiable {
                 }
                 await reload()
             } catch {
-                if kind == .remote, app?.handleRemoteOperationFailure(error, pane: self, action: "新建文件夹失败") == true {
+                if kind == .remote, app?.handleRemoteOperationFailure(error, pane: self, action: L10n.tr("新建文件夹失败")) == true {
                     return
                 } else {
-                    app?.errorMessage = "新建文件夹失败：\(error.localizedDescription)"
+                    app?.errorMessage = L10n.tr("新建文件夹失败：%@", error.localizedDescription)
                 }
             }
         }
@@ -307,10 +307,10 @@ final class PaneModel: Identifiable {
                 }
                 await reload()
             } catch {
-                if kind == .remote, app?.handleRemoteOperationFailure(error, pane: self, action: "重命名失败") == true {
+                if kind == .remote, app?.handleRemoteOperationFailure(error, pane: self, action: L10n.tr("重命名失败")) == true {
                     return
                 } else {
-                    app?.errorMessage = "重命名失败：\(error.localizedDescription)"
+                    app?.errorMessage = L10n.tr("重命名失败：%@", error.localizedDescription)
                 }
             }
         }
@@ -330,10 +330,10 @@ final class PaneModel: Identifiable {
                     }
                 } catch {
                     if kind == .remote,
-                       app?.handleRemoteOperationFailure(error, pane: self, action: "删除「\(item.name)」失败") == true {
+                       app?.handleRemoteOperationFailure(error, pane: self, action: L10n.tr("删除「%@」失败", item.name)) == true {
                         return
                     }
-                    app?.errorMessage = "删除「\(item.name)」失败：\(error.localizedDescription)"
+                    app?.errorMessage = L10n.tr("删除「%@」失败：%@", item.name, error.localizedDescription)
                 }
             }
             await reload()

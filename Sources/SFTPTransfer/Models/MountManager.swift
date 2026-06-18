@@ -40,9 +40,9 @@ enum MountDependencyStatus: Equatable, Sendable {
         case .ready:
             return ""
         case .missingMacFuse:
-            return "挂载功能需要安装 macFUSE。当前没有检测到 macFUSE，因此无法挂载远程目录。"
+            return L10n.tr("挂载功能需要安装 macFUSE。当前没有检测到 macFUSE，因此无法挂载远程目录。")
         case .missingSSHFS:
-            return "挂载功能需要安装 sshfs。当前没有检测到 sshfs，因此无法挂载远程目录。"
+            return L10n.tr("挂载功能需要安装 sshfs。当前没有检测到 sshfs，因此无法挂载远程目录。")
         }
     }
 }
@@ -60,19 +60,19 @@ enum MountError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .macFuseMissing:
-            return "无法开启挂载功能：未检测到 macFUSE。"
+            return L10n.tr("无法开启挂载功能：未检测到 macFUSE。")
         case .sshfsMissing:
-            return "无法开启挂载功能：未检测到 sshfs。"
+            return L10n.tr("无法开启挂载功能：未检测到 sshfs。")
         case .localDirectoryMissing(let path):
-            return "无法挂载：本地目录不存在或不是文件夹：\(path)"
+            return L10n.tr("无法挂载：本地目录不存在或不是文件夹：%@", path)
         case .localPathIsSymlink(let path):
-            return "无法挂载：本地目录是符号链接，为避免误操作已拒绝：\(path)"
+            return L10n.tr("无法挂载：本地目录是符号链接，为避免误操作已拒绝：%@", path)
         case .localDirectoryNotEmpty(let path):
-            return "无法挂载：本地目录不是空目录。为避免隐藏或覆盖本地文件，请先选择一个空目录：\(path)"
+            return L10n.tr("无法挂载：本地目录不是空目录。为避免隐藏或覆盖本地文件，请先选择一个空目录：%@", path)
         case .localPathAlreadyMounted(let path):
-            return "无法挂载：本地目录已经是挂载点：\(path)"
+            return L10n.tr("无法挂载：本地目录已经是挂载点：%@", path)
         case .mountNotManaged(let path):
-            return "无法取消挂载：该路径当前不是本应用创建的有效 sshfs 挂载：\(path)"
+            return L10n.tr("无法取消挂载：该路径当前不是本应用创建的有效 sshfs 挂载：%@", path)
         case .commandFailed(let message):
             return message
         }
@@ -237,7 +237,7 @@ private enum MountSystem {
                 arguments += ["-o", "IdentityFile=\(identity)"]
             } else if request.host.authentication == .password {
                 guard let password = try? PasswordVault.password(for: request.host.id), !password.isEmpty else {
-                    throw MountError.commandFailed("挂载失败：未找到该服务器保存的密码。")
+                    throw MountError.commandFailed(L10n.tr("挂载失败：未找到该服务器保存的密码。"))
                 }
                 arguments += ["-o", "password_stdin"]
                 standardInput = password + "\n"
@@ -249,7 +249,7 @@ private enum MountSystem {
 
         let result = ProcessRunner.run(sshfs, arguments: arguments, standardInput: standardInput)
         guard result.exitCode == 0 else {
-            throw MountError.commandFailed("挂载失败：\(result.combinedOutput)")
+            throw MountError.commandFailed(L10n.tr("挂载失败：%@", result.combinedOutput))
         }
     }
 
@@ -259,7 +259,7 @@ private enum MountSystem {
         }
         let result = ProcessRunner.run("/sbin/umount", arguments: [record.localPath])
         guard result.exitCode == 0 else {
-            throw MountError.commandFailed("取消挂载失败：\(result.combinedOutput)")
+            throw MountError.commandFailed(L10n.tr("取消挂载失败：%@", result.combinedOutput))
         }
     }
 
@@ -330,7 +330,7 @@ private enum MountSystem {
         do {
             contents = try FileManager.default.contentsOfDirectory(atPath: path)
         } catch {
-            throw MountError.commandFailed("无法挂载：不能检查本地目录是否为空：\(path)")
+            throw MountError.commandFailed(L10n.tr("无法挂载：不能检查本地目录是否为空：%@", path))
         }
         if !contents.isEmpty {
             throw MountError.localDirectoryNotEmpty(path)
@@ -384,7 +384,7 @@ private enum ProcessRunner {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n")
-            return joined.isEmpty ? "命令退出码 \(exitCode)" : joined
+            return joined.isEmpty ? L10n.tr("命令退出码 %d", exitCode) : joined
         }
     }
 

@@ -63,26 +63,26 @@ struct FilePaneView: View {
         .onChange(of: pane.selection) { _, _ in
             refreshQuickPropertyPanelForSelection()
         }
-        .alert("新建文件夹", isPresented: $newFolderPresented) {
-            TextField("名称", text: $newFolderName)
-            Button("创建") { pane.makeFolder(named: newFolderName) }
-            Button("取消", role: .cancel) {}
+        .alert(L10n.tr("新建文件夹"), isPresented: $newFolderPresented) {
+            TextField(L10n.tr("名称"), text: $newFolderName)
+            Button(L10n.tr("创建")) { pane.makeFolder(named: newFolderName) }
+            Button(L10n.tr("取消"), role: .cancel) {}
         }
-        .alert("重命名", isPresented: Binding(get: { renameTarget != nil },
+        .alert(L10n.tr("重命名"), isPresented: Binding(get: { renameTarget != nil },
                                           set: { if !$0 { renameTarget = nil } })) {
-            TextField("新名称", text: $renameText)
-            Button("确定") {
+            TextField(L10n.tr("新名称"), text: $renameText)
+            Button(L10n.tr("确定")) {
                 if let target = renameTarget { pane.rename(target, to: renameText) }
                 renameTarget = nil
             }
-            Button("取消", role: .cancel) { renameTarget = nil }
+            Button(L10n.tr("取消"), role: .cancel) { renameTarget = nil }
         }
         .confirmationDialog(deleteMessage, isPresented: $deletePresented, titleVisibility: .visible) {
-            Button(pane.isRemote ? "删除" : "移到废纸篓", role: .destructive) {
+            Button(pane.isRemote ? L10n.tr("删除") : L10n.tr("移到废纸篓"), role: .destructive) {
                 pane.delete(deleteTargets)
                 deleteTargets = []
             }
-            Button("取消", role: .cancel) { deleteTargets = [] }
+            Button(L10n.tr("取消"), role: .cancel) { deleteTargets = [] }
         }
         .sheet(item: $propertyTarget, onDismiss: {
             propertyTask?.cancel()
@@ -99,9 +99,10 @@ struct FilePaneView: View {
         HStack(spacing: 6) {
             Text(pane.title).font(.headline)
             if pane.recursiveSearch, let results = pane.searchResults {
-                Text("· 搜索结果 \(results.count)\(results.count >= 2000 ? "+" : "")")
+                Text(L10n.tr("· 搜索结果 %@",
+                             "\(results.count)\(results.count >= 2000 ? "+" : "")"))
                     .font(.caption).foregroundStyle(.secondary)
-                Button("清除") { pane.clearSearchResults() }
+                Button(L10n.tr("清除")) { pane.clearSearchResults() }
                     .buttonStyle(.borderless).font(.caption)
             }
             Spacer()
@@ -114,24 +115,24 @@ struct FilePaneView: View {
             // 导航簇：后退 / 前进 / 上级 / 主目录
             HStack(spacing: 2) {
                 Button { pane.goBack() } label: { Image(systemName: "chevron.backward") }
-                    .disabled(!pane.canGoBack).help("后退")
+                    .disabled(!pane.canGoBack).help(L10n.tr("后退"))
                 Button { pane.goForward() } label: { Image(systemName: "chevron.forward") }
-                    .disabled(!pane.canGoForward).help("前进")
+                    .disabled(!pane.canGoForward).help(L10n.tr("前进"))
                 Button { pane.goUp() } label: { Image(systemName: "arrow.up") }
-                    .help("上级目录")
+                    .help(L10n.tr("上级目录"))
                 Button { pane.goHome() } label: { Image(systemName: "house") }
-                    .help("主目录")
+                    .help(L10n.tr("主目录"))
             }
 
             toolbarDivider
 
             Button { Task { await pane.reload() } } label: { Image(systemName: "arrow.clockwise") }
-                .help("刷新")
+                .help(L10n.tr("刷新"))
             if !pane.isRemote { placesMenu }
 
             toolbarDivider
 
-            TextField("路径", text: $pathField)
+            TextField(L10n.tr("路径"), text: $pathField)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { pane.navigate(to: pathField) }
 
@@ -141,9 +142,9 @@ struct FilePaneView: View {
             } label: {
                 Image(systemName: pane.recursiveSearch ? "magnifyingglass.circle.fill" : "magnifyingglass")
             }
-            .help(pane.recursiveSearch ? "递归搜索：回车在子目录中查找（点击切回仅当前目录）"
-                                       : "仅过滤当前目录（点击切换为递归搜索）")
-            TextField(pane.recursiveSearch ? "递归搜索后回车" : "搜索", text: $pane.searchText)
+            .help(pane.recursiveSearch ? L10n.tr("递归搜索：回车在子目录中查找（点击切回仅当前目录）")
+                                       : L10n.tr("仅过滤当前目录（点击切换为递归搜索）"))
+            TextField(pane.recursiveSearch ? L10n.tr("递归搜索后回车") : L10n.tr("搜索"), text: $pane.searchText)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 120)
                 .onSubmit { if pane.recursiveSearch { Task { await pane.runSearch() } } }
@@ -169,7 +170,7 @@ struct FilePaneView: View {
             ForEach(LocalFileSystem.quickPlaces) { placeButton($0) }
             let volumes = LocalFileSystem.externalVolumes
             if !volumes.isEmpty {
-                Section("外接磁盘") {
+                Section(L10n.tr("外接磁盘")) {
                     ForEach(volumes) { placeButton($0) }
                 }
             }
@@ -178,7 +179,7 @@ struct FilePaneView: View {
         }
         .menuStyle(.button)
         .fixedSize()
-        .help("快速位置")
+        .help(L10n.tr("快速位置"))
     }
 
     private func placeButton(_ place: LocalFileSystem.Place) -> some View {
@@ -193,16 +194,16 @@ struct FilePaneView: View {
     private var overflowMenu: some View {
         Menu {
             Button { newFolderName = ""; newFolderPresented = true } label: {
-                Label("新建文件夹…", systemImage: "folder.badge.plus")
+                Label(L10n.tr("新建文件夹…"), systemImage: "folder.badge.plus")
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
             Toggle(isOn: $pane.showHidden) {
-                Label("显示隐藏文件", systemImage: "eye")
+                Label(L10n.tr("显示隐藏文件"), systemImage: "eye")
             }
             if !pane.isRemote {
                 Divider()
                 Button { LocalFileSystem.revealInFinder([pane.currentPath]) } label: {
-                    Label("在访达中打开当前目录", systemImage: "arrow.up.forward.app")
+                    Label(L10n.tr("在访达中打开当前目录"), systemImage: "arrow.up.forward.app")
                 }
             }
         } label: {
@@ -211,20 +212,20 @@ struct FilePaneView: View {
         .menuStyle(.button)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("更多")
+        .help(L10n.tr("更多"))
     }
 
     private var tableCore: some View {
         Table(of: FileItem.self, selection: $pane.selection, sortOrder: $pane.sortOrder) {
-            TableColumn("名称", value: \.name) { item in
+            TableColumn(LocalizedStringResource("名称", bundle: .module), value: \.name) { item in
                 Label(item.name, systemImage: item.isDirectory ? "folder.fill" : "doc")
             }
-            TableColumn("大小", value: \.size) { item in
-                Text(item.isDirectory ? "—" : formatSize(item.size))
+            TableColumn(LocalizedStringResource("大小", bundle: .module), value: \.size) { item in
+                Text(item.isDirectory ? L10n.tr("—") : formatSize(item.size))
                     .foregroundStyle(.secondary)
             }
             .width(min: 70, ideal: 90)
-            TableColumn("修改时间", value: \.modifiedSortKey) { item in
+            TableColumn(LocalizedStringResource("修改时间", bundle: .module), value: \.modifiedSortKey) { item in
                 Text(item.modified.map { Self.dateFormatter.string(from: $0) } ?? "")
                     .foregroundStyle(.secondary)
             }
@@ -267,26 +268,26 @@ struct FilePaneView: View {
     private func menu(for ids: Set<FileItem.ID>) -> some View {
         let targets = pane.displayedItems.filter { ids.contains($0.id) }
         if pane.isRemote {
-            Button("下载") { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
+            Button(L10n.tr("下载")) { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
                 .disabled(targets.isEmpty || !app.canUploadDownloadFromPaneToOpposite(pane))
             if targets.count == 1, let only = targets.first {
-                Button("查看属性…") { showRemoteProperties(for: only) }
+                Button(L10n.tr("查看属性…")) { showRemoteProperties(for: only) }
             }
         } else {
-            Button("上传") { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
+            Button(L10n.tr("上传")) { pane.selection = ids; app.transferFromPaneToOpposite(pane) }
                 .disabled(targets.isEmpty || !app.canUploadDownloadFromPaneToOpposite(pane))
         }
         if !pane.isRemote, !targets.isEmpty {
-            Button("在访达中打开") { LocalFileSystem.revealInFinder(targets.map(\.path)) }
+            Button(L10n.tr("在访达中打开")) { LocalFileSystem.revealInFinder(targets.map(\.path)) }
         }
         Divider()
-        Button("新建文件夹…") { newFolderName = ""; newFolderPresented = true }
+        Button(L10n.tr("新建文件夹…")) { newFolderName = ""; newFolderPresented = true }
             .keyboardShortcut("n", modifiers: [.command, .shift])
         if targets.count == 1, let only = targets.first {
-            Button("重命名…") { renameTarget = only; renameText = only.name }
+            Button(L10n.tr("重命名…")) { renameTarget = only; renameText = only.name }
         }
         if !targets.isEmpty {
-            Button(pane.isRemote ? "删除" : "移到废纸篓", role: .destructive) {
+            Button(pane.isRemote ? L10n.tr("删除") : L10n.tr("移到废纸篓"), role: .destructive) {
                 deleteTargets = targets
                 deletePresented = true
             }
@@ -299,7 +300,7 @@ struct FilePaneView: View {
         propertyTarget = item
         propertyState = .loading
         guard let session = pane.remoteSession else {
-            propertyState = .failed("尚未连接到服务器")
+            propertyState = .failed(L10n.tr("尚未连接到服务器"))
             return
         }
 
@@ -313,7 +314,7 @@ struct FilePaneView: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 propertyState = .failed(error.localizedDescription)
-                app.handleRemoteOperationFailure(error, pane: pane, action: "读取远程属性失败", showAlert: false)
+                app.handleRemoteOperationFailure(error, pane: pane, action: L10n.tr("读取远程属性失败"), showAlert: false)
             }
         }
     }
@@ -386,7 +387,7 @@ struct FilePaneView: View {
         quickPropertyTarget = item
         quickPropertyState = .loading
         guard let session = pane.remoteSession else {
-            quickPropertyState = .failed("尚未连接到服务器")
+            quickPropertyState = .failed(L10n.tr("尚未连接到服务器"))
             return
         }
 
@@ -400,7 +401,7 @@ struct FilePaneView: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 quickPropertyState = .failed(error.localizedDescription)
-                app.handleRemoteOperationFailure(error, pane: pane, action: "读取远程属性失败", showAlert: false)
+                app.handleRemoteOperationFailure(error, pane: pane, action: L10n.tr("读取远程属性失败"), showAlert: false)
             }
         }
     }
@@ -414,11 +415,11 @@ struct FilePaneView: View {
 
     private var deleteMessage: String {
         if deleteTargets.count == 1 {
-            return pane.isRemote ? "确定删除「\(deleteTargets[0].name)」？此操作不可撤销。"
-                                 : "把「\(deleteTargets[0].name)」移到废纸篓？"
+            return pane.isRemote ? L10n.tr("确定删除「%@」？此操作不可撤销。", deleteTargets[0].name)
+                                 : L10n.tr("把「%@」移到废纸篓？", deleteTargets[0].name)
         }
-        return pane.isRemote ? "确定删除选中的 \(deleteTargets.count) 项？此操作不可撤销。"
-                             : "把选中的 \(deleteTargets.count) 项移到废纸篓？"
+        return pane.isRemote ? L10n.tr("确定删除选中的 %d 项？此操作不可撤销。", deleteTargets.count)
+                             : L10n.tr("把选中的 %d 项移到废纸篓？", deleteTargets.count)
     }
 }
 
@@ -510,7 +511,7 @@ private struct RemotePropertySheet: View {
                         .font(.headline)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(item.isDirectory ? "远程文件夹" : "远程文件")
+                    Text(item.isDirectory ? L10n.tr("远程文件夹") : L10n.tr("远程文件"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -519,9 +520,9 @@ private struct RemotePropertySheet: View {
             Divider()
 
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 9) {
-                propertyRow("位置", item.path)
-                propertyRow("类型", item.isDirectory ? "文件夹" : "文件")
-                propertyRow("修改时间", item.modified.map { Self.dateFormatter.string(from: $0) } ?? "未知")
+                propertyRow(L10n.tr("位置"), item.path)
+                propertyRow(L10n.tr("类型"), item.isDirectory ? L10n.tr("文件夹") : L10n.tr("文件"))
+                propertyRow(L10n.tr("修改时间"), item.modified.map { Self.dateFormatter.string(from: $0) } ?? L10n.tr("未知"))
                 sizeRows
             }
 
@@ -529,7 +530,7 @@ private struct RemotePropertySheet: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(item.isDirectory ? "正在递归计算文件夹大小…" : "正在读取属性…")
+                    Text(item.isDirectory ? L10n.tr("正在递归计算文件夹大小…") : L10n.tr("正在读取属性…"))
                         .foregroundStyle(.secondary)
                 }
             } else if case .failed(let message) = state {
@@ -539,7 +540,7 @@ private struct RemotePropertySheet: View {
 
             HStack {
                 Spacer()
-                Button("关闭") { onClose() }
+                Button(L10n.tr("关闭")) { onClose() }
                     .keyboardShortcut(.cancelAction)
             }
         }
@@ -551,14 +552,14 @@ private struct RemotePropertySheet: View {
     private var sizeRows: some View {
         switch state {
         case .idle, .loading:
-            propertyRow("大小", item.isDirectory ? "计算中…" : formatSize(item.size))
+            propertyRow(L10n.tr("大小"), item.isDirectory ? L10n.tr("计算中…") : formatSize(item.size))
         case .loaded(let properties):
-            propertyRow("大小", formatSize(properties.totalSize))
+            propertyRow(L10n.tr("大小"), formatSize(properties.totalSize))
             if item.isDirectory {
-                propertyRow("包含", "\(properties.fileCount) 个文件，\(properties.directoryCount) 个文件夹")
+                propertyRow(L10n.tr("包含"), L10n.tr("%d 个文件，%d 个文件夹", properties.fileCount, properties.directoryCount))
             }
         case .failed:
-            propertyRow("大小", item.isDirectory ? "计算失败" : formatSize(item.size))
+            propertyRow(L10n.tr("大小"), item.isDirectory ? L10n.tr("计算失败") : formatSize(item.size))
         }
     }
 
@@ -608,18 +609,18 @@ private struct RemoteQuickPropertyPanel: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 7) {
-                quickRow("类型", item.isDirectory ? "文件夹" : "文件")
-                quickRow("修改时间", item.modified.map { Self.dateFormatter.string(from: $0) } ?? "未知")
+                quickRow(L10n.tr("类型"), item.isDirectory ? L10n.tr("文件夹") : L10n.tr("文件"))
+                quickRow(L10n.tr("修改时间"), item.modified.map { Self.dateFormatter.string(from: $0) } ?? L10n.tr("未知"))
                 switch state {
                 case .idle, .loading:
-                    quickRow("大小", item.isDirectory ? "计算中…" : formatSize(item.size))
+                    quickRow(L10n.tr("大小"), item.isDirectory ? L10n.tr("计算中…") : formatSize(item.size))
                 case .loaded(let properties):
-                    quickRow("大小", formatSize(properties.totalSize))
+                    quickRow(L10n.tr("大小"), formatSize(properties.totalSize))
                     if item.isDirectory {
-                        quickRow("包含", "\(properties.fileCount) 个文件，\(properties.directoryCount) 个文件夹")
+                        quickRow(L10n.tr("包含"), L10n.tr("%d 个文件，%d 个文件夹", properties.fileCount, properties.directoryCount))
                     }
                 case .failed:
-                    quickRow("大小", item.isDirectory ? "计算失败" : formatSize(item.size))
+                    quickRow(L10n.tr("大小"), item.isDirectory ? L10n.tr("计算失败") : formatSize(item.size))
                 }
             }
 
@@ -627,7 +628,7 @@ private struct RemoteQuickPropertyPanel: View {
                 HStack(spacing: 7) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(item.isDirectory ? "正在递归计算…" : "正在读取…")
+                    Text(item.isDirectory ? L10n.tr("正在递归计算…") : L10n.tr("正在读取…"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

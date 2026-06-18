@@ -10,8 +10,8 @@ enum SFTPSessionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConnected: return "尚未连接到服务器"
-        case .connectionLost: return "连接已断开，请重新连接后重试"
+        case .notConnected: return L10n.tr("尚未连接到服务器")
+        case .connectionLost: return L10n.tr("连接已断开，请重新连接后重试")
         }
     }
 }

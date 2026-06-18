@@ -7,9 +7,9 @@ struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Divider()
-            Button("连接") { model.connect() }
+            Button(L10n.tr("连接")) { model.connect() }
                 .keyboardShortcut("k", modifiers: .command)
-            Button("断开连接") { model.disconnect() }
+            Button(L10n.tr("断开连接")) { model.disconnect() }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
         }
     }

@@ -150,7 +150,7 @@ final class TransferEngine {
             etaSeconds = 0
         }
 
-        appendLog("开始处理 \(requests.count) 项")
+        appendLog(L10n.tr("开始处理 %d 项", requests.count))
         var tasks: [FileTask] = []
         var failed = 0
         var connectionLost = false
@@ -159,7 +159,7 @@ final class TransferEngine {
                 tasks += try await expand(r, sessionResolver: sessionResolver)
             } catch {
                 if SFTPSession.isConnectionLost(error) { connectionLost = true }
-                appendLog("✗ 展开失败 \(r.source.name): \(error.localizedDescription)")
+                appendLog(L10n.tr("✗ 展开失败 %@: %@", r.source.name, error.localizedDescription))
                 failed += 1
             }
         }
@@ -167,8 +167,8 @@ final class TransferEngine {
         queueTotal = tasks.count
         queueIndex = 0
         guard !tasks.isEmpty else {
-            appendLog("没有要传输的文件")
-            lastOutcome = failed > 0 ? Outcome(kind: .failure, message: "传输失败") : nil
+            appendLog(L10n.tr("没有要传输的文件"))
+            lastOutcome = failed > 0 ? Outcome(kind: .failure, message: L10n.tr("传输失败")) : nil
             return RunResult(connectionLost: connectionLost)
         }
 
@@ -198,29 +198,29 @@ final class TransferEngine {
                     ensuredDirsKeyed[key] = set
                 }
                 try await performTransfer(task, sessionResolver: sessionResolver)
-                appendLog("✓ \(currentName)")
+                appendLog(L10n.tr("✓ %@", currentName))
                 currentBytes = currentTotal
                 done += 1
             } catch is CancellationError {
                 break
             } catch {
                 if SFTPSession.isConnectionLost(error) { connectionLost = true }
-                appendLog("✗ \(currentName): \(error.localizedDescription)")
+                appendLog(L10n.tr("✗ %@: %@", currentName, error.localizedDescription))
                 failed += 1
                 if connectionLost { break }
             }
         }
 
         if Task.isCancelled {
-            appendLog("⊘ 已取消")
-            lastOutcome = Outcome(kind: .cancelled, message: "已取消（完成 \(done) 项）")
+            appendLog(L10n.tr("⊘ 已取消"))
+            lastOutcome = Outcome(kind: .cancelled, message: L10n.tr("已取消（完成 %d 项）", done))
         } else if failed > 0 {
-            appendLog("完成 \(done) 项，\(failed) 项失败")
+            appendLog(L10n.tr("完成 %d 项，%d 项失败", done, failed))
             lastOutcome = Outcome(kind: .failure,
-                                  message: done > 0 ? "完成 \(done) 项，\(failed) 项失败" : "传输失败")
+                                  message: done > 0 ? L10n.tr("完成 %d 项，%d 项失败", done, failed) : L10n.tr("传输失败"))
         } else {
-            appendLog("✓ 全部完成")
-            lastOutcome = Outcome(kind: .success, message: "已完成 · \(done) 项")
+            appendLog(L10n.tr("✓ 全部完成"))
+            lastOutcome = Outcome(kind: .success, message: L10n.tr("已完成 · %d 项", done))
         }
         return RunResult(connectionLost: connectionLost)
     }

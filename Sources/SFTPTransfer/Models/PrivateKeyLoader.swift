@@ -12,12 +12,12 @@ enum PrivateKeyError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .fileNotFound(let p):    return "私钥文件不存在：\(p)"
-        case .unreadable(let p):      return "无法读取私钥文件：\(p)"
-        case .unsupportedType(let t): return "暂不支持的密钥类型：\(t)（目前支持 ed25519 / rsa）"
-        case .needsPassphrase:        return "该私钥带有口令，需要输入口令"
-        case .wrongPassphrase:        return "私钥口令不正确"
-        case .parseFailed(let m):     return "解析私钥失败：\(m)"
+        case .fileNotFound(let p):    return L10n.tr("私钥文件不存在：%@", p)
+        case .unreadable(let p):      return L10n.tr("无法读取私钥文件：%@", p)
+        case .unsupportedType(let t): return L10n.tr("暂不支持的密钥类型：%@（目前支持 ed25519 / rsa）", t)
+        case .needsPassphrase:        return L10n.tr("该私钥带有口令，需要输入口令")
+        case .wrongPassphrase:        return L10n.tr("私钥口令不正确")
+        case .parseFailed(let m):     return L10n.tr("解析私钥失败：%@", m)
         }
     }
 }

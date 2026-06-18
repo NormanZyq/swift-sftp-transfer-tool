@@ -33,6 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>$APP_NAME</string>
     <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+    <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>$EXEC</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -44,6 +45,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>LSUIElement</key><false/>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh-Hans</string>
+        <string>en</string>
+    </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
@@ -65,6 +71,20 @@ PLIST
 
 echo "APPL????" > "$APP/Contents/PkgInfo"
 cp "$BIN" "$APP/Contents/MacOS/$EXEC"
+
+BIN_DIR="$(dirname "$BIN")"
+RESOURCE_BUNDLE="$(find "$BIN_DIR" -maxdepth 1 -type d -name "${EXEC}_${EXEC}.bundle" -print -quit)"
+if [ -n "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "$APP/Contents/Resources/"
+else
+    echo "⚠ 未找到 SwiftPM 资源 bundle，本地化资源可能无法加载。" >&2
+fi
+
+shopt -s nullglob
+for lproj in Sources/SFTPTransfer/Resources/*.lproj; do
+    cp -R "$lproj" "$APP/Contents/Resources/"
+done
+shopt -u nullglob
 
 if [ -f "$ICON" ]; then
     cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"

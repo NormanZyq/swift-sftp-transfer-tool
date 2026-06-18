@@ -23,11 +23,11 @@ enum LocalFileSystem {
     static var quickPlaces: [Place] {
         let h = home
         let candidates: [Place] = [
-            Place(name: "主目录",      path: h,                          systemImage: "house"),
-            Place(name: "iCloud 云盘", path: iCloudDrive,                systemImage: "icloud"),
-            Place(name: "桌面",        path: h + "/Desktop",             systemImage: "desktopcomputer"),
-            Place(name: "文档",        path: h + "/Documents",           systemImage: "doc"),
-            Place(name: "下载",        path: h + "/Downloads",           systemImage: "arrow.down.circle"),
+            Place(name: L10n.tr("主目录"),      path: h,                          systemImage: "house"),
+            Place(name: L10n.tr("iCloud 云盘"), path: iCloudDrive,                systemImage: "icloud"),
+            Place(name: L10n.tr("桌面"),        path: h + "/Desktop",             systemImage: "desktopcomputer"),
+            Place(name: L10n.tr("文档"),        path: h + "/Documents",           systemImage: "doc"),
+            Place(name: L10n.tr("下载"),        path: h + "/Downloads",           systemImage: "arrow.down.circle"),
         ]
         return candidates.filter { isDirectory($0.path) }
     }
