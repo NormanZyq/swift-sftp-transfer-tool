@@ -49,6 +49,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <array>
         <string>zh-Hans</string>
         <string>en</string>
+        <string>ja</string>
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
